@@ -18,11 +18,22 @@
 
 ## Installation
 
+> **Prerequisite:** PyTorch and PyTorch Geometric must be installed first.
+> Follow the [PyTorch](https://pytorch.org/get-started/locally/) and
+> [PyG](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html)
+> installation guides for your platform and CUDA version.
+
 ```bash
 pip install falkordb-pyg
 ```
 
-> **Requires:** Python ≥ 3.9, PyTorch ≥ 2.0, PyTorch Geometric ≥ 2.4, FalkorDB Python client ≥ 1.0.
+Or install with PyTorch and PyG included (CPU-only defaults):
+
+```bash
+pip install 'falkordb-pyg[torch]'
+```
+
+> **Requires:** Python ≥ 3.10, PyTorch ≥ 2.0, PyTorch Geometric ≥ 2.4, FalkorDB Python client ≥ 1.0.
 
 ## Quick Start
 
