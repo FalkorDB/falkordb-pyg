@@ -80,16 +80,13 @@ class FalkorDBGraphStore(GraphStore):
         query = build_edge_query(src_label, rel, dst_label)
         result = self._graph.query(query)
 
-        raw_src = [int(row[0]) for row in result.result_set]
-        raw_dst = [int(row[1]) for row in result.result_set]
-
         src_mapper = self._get_or_build_mapper(src_type)
         dst_mapper = self._get_or_build_mapper(dst_type)
 
         new_src, new_dst = [], []
-        for s, d in zip(raw_src, raw_dst):
-            ps = src_mapper.falkor_to_pyg(s)
-            pd = dst_mapper.falkor_to_pyg(d)
+        for row in result.result_set:
+            ps = src_mapper.falkor_to_pyg(int(row[0]))
+            pd = dst_mapper.falkor_to_pyg(int(row[1]))
             if ps is not None and pd is not None:
                 new_src.append(ps)
                 new_dst.append(pd)
