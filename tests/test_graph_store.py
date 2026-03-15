@@ -1,6 +1,6 @@
 """Unit tests for FalkorDBGraphStore."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -34,6 +34,7 @@ def _make_graph(query_map):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def homo_graph():
     """A mock FalkorDB graph with one node type 'paper' and one edge type."""
@@ -43,12 +44,14 @@ def homo_graph():
     edge_result = _make_result([[10, 11], [11, 12]])
 
     graph = MagicMock()
+
     def _query(q):
         if "RETURN ID(n)" in q:
             return node_result
         if "RETURN ID(s)" in q:
             return edge_result
         raise ValueError(f"Unexpected query: {q}")
+
     graph.query.side_effect = _query
     return graph
 
@@ -62,6 +65,7 @@ def hetero_graph():
     cites_edges = _make_result([[0, 1], [1, 2]])
 
     graph = MagicMock()
+
     def _query(q):
         if "`paper`" in q and "RETURN ID(n)" in q:
             return paper_ids
@@ -72,6 +76,7 @@ def hetero_graph():
         if "`cites`" in q:
             return cites_edges
         raise ValueError(f"Unexpected query: {q}")
+
     graph.query.side_effect = _query
     return graph
 
@@ -79,6 +84,7 @@ def hetero_graph():
 # ---------------------------------------------------------------------------
 # Tests – put / get / remove edge index
 # ---------------------------------------------------------------------------
+
 
 class TestPutGetRemoveEdgeIndex:
     def test_put_and_get_coo(self, homo_graph):
@@ -143,6 +149,7 @@ class TestPutGetRemoveEdgeIndex:
 # Tests – get_all_edge_attrs
 # ---------------------------------------------------------------------------
 
+
 class TestGetAllEdgeAttrs:
     def test_empty_initially(self):
         graph = MagicMock()
@@ -170,6 +177,7 @@ class TestGetAllEdgeAttrs:
 # ---------------------------------------------------------------------------
 # Tests – heterogeneous graphs
 # ---------------------------------------------------------------------------
+
 
 class TestHeterogeneousGraph:
     def test_hetero_edge_remapping(self, hetero_graph):
@@ -204,6 +212,7 @@ class TestHeterogeneousGraph:
 # Tests – node ID mapping via custom labels
 # ---------------------------------------------------------------------------
 
+
 class TestNodeTypeLabelMapping:
     def test_custom_label_used_in_query(self):
         graph = MagicMock()
@@ -216,6 +225,7 @@ class TestNodeTypeLabelMapping:
             if "RETURN ID(s)" in q:
                 return edge_result
             raise ValueError(q)
+
         graph.query.side_effect = _query
 
         store = FalkorDBGraphStore(
@@ -235,6 +245,7 @@ class TestNodeTypeLabelMapping:
 # ---------------------------------------------------------------------------
 # Tests – caching behaviour
 # ---------------------------------------------------------------------------
+
 
 class TestCaching:
     def test_db_not_queried_on_second_get(self, homo_graph):
