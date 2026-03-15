@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falkordb-pyg"
+version = "0.1.0"
+description = "PyTorch Geometric Remote Backend for FalkorDB"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "FalkorDB", email = "info@falkordb.com" }]
+keywords = ["falkordb", "pytorch-geometric", "gnn", "graph-neural-network", "graph-database"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0",
+    "torch_geometric>=2.4",
+    "falkordb>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-mock>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/FalkorDB/falkordb-pyg"
+Repository = "https://github.com/FalkorDB/falkordb-pyg"
+Issues = "https://github.com/FalkorDB/falkordb-pyg/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["falkordb_pyg*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
