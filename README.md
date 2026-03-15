@@ -182,9 +182,9 @@ mapper.num_nodes            # -> 3
 
 FalkorDB assigns internal integer IDs to nodes that may not be contiguous or start at zero. `falkordb-pyg` transparently builds a `NodeIDMapper` for each node type on first access, converting FalkorDB IDs to contiguous PyG indices. Edges referencing IDs not present in the mapper are silently dropped.
 
-## Comparison with Kùzu PyG Integration
+## Comparison with Kuzu PyG Integration
 
-| Feature | Kùzu | FalkorDB |
+| Feature | Kuzu | FalkorDB |
 |---|---|---|
 | Database type | In-process embedded | Client-server (Redis-based) |
 | Query language | Cypher | OpenCypher |

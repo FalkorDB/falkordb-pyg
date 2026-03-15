@@ -22,6 +22,7 @@ heterogeneous
 html
 https
 isort
+Kuzu
 linter
 LinkNeighborLoader
 mypy
@@ -30,13 +31,18 @@ openCypher
 Pre
 py
 pycodestyle
+pyg
 Pyflakes
 PyG
+PyPI
+PyG's
 pyspelling
 pytest
 PyTorch
+Redis
 sexualized
 socio
+subclasses
 subgraph
 tensors
 wordlist
