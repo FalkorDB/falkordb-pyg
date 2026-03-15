@@ -58,7 +58,7 @@ def homo_graph_name():
     Graph layout::
 
         paper0 --cites--> paper1 --cites--> paper2
-                                   \\-cites--> paper0
+                                  paper1 --cites--> paper0
 
     Each paper node has:
         x: 2-D feature vector
@@ -398,7 +398,12 @@ class TestGetRemoteBackendE2E:
         assert ei[0].shape[0] == 3
 
     def test_custom_mappings(self, hetero_graph_name):
-        """Custom node_type_to_label and edge_type_to_rel should work."""
+        """Custom node_type_to_label and edge_type_to_rel should work.
+
+        Here PyG type names ("Paper", "Author") differ from the FalkorDB
+        labels ("paper", "author") stored in the graph.  The mappings
+        translate the capitalized PyG types to the lowercase DB labels.
+        """
         feature_store, graph_store = get_remote_backend(
             host=_HOST,
             port=_PORT,
