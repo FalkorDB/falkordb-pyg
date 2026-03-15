@@ -169,9 +169,7 @@ class TestFeatureStoreE2E:
 
         # Then access with index
         idx = torch.tensor([0, 2])
-        indexed_attr = FalkorDBTensorAttr(
-            group_name="paper", attr_name="x", index=idx
-        )
+        indexed_attr = FalkorDBTensorAttr(group_name="paper", attr_name="x", index=idx)
         indexed = store._get_tensor(indexed_attr)
         assert indexed.shape == (2, 2)
         assert torch.equal(indexed, full[idx])
@@ -225,9 +223,7 @@ class TestGraphStoreE2E:
     def test_get_edge_index_coo(self, homo_graph_name):
         graph = _connect(homo_graph_name)
         store = FalkorDBGraphStore(graph)
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
         ei = store._get_edge_index(attr)
         assert ei is not None
@@ -242,9 +238,7 @@ class TestGraphStoreE2E:
     def test_node_id_remapping(self, homo_graph_name):
         graph = _connect(homo_graph_name)
         store = FalkorDBGraphStore(graph)
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
         store._get_edge_index(attr)
         # Verify mapper was built with 3 nodes
@@ -254,9 +248,7 @@ class TestGraphStoreE2E:
     def test_edge_attr_auto_registered(self, homo_graph_name):
         graph = _connect(homo_graph_name)
         store = FalkorDBGraphStore(graph)
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
         store._get_edge_index(attr)
         all_attrs = store.get_all_edge_attrs()
@@ -267,9 +259,7 @@ class TestGraphStoreE2E:
     def test_caching_avoids_second_query(self, homo_graph_name):
         graph = _connect(homo_graph_name)
         store = FalkorDBGraphStore(graph)
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
         first = store._get_edge_index(attr)
         second = store._get_edge_index(attr)
@@ -320,9 +310,7 @@ class TestHeterogeneousE2E:
     def test_writes_edges(self, hetero_graph_name):
         graph = _connect(hetero_graph_name)
         store = FalkorDBGraphStore(graph)
-        attr = EdgeAttr(
-            edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO)
 
         ei = store._get_edge_index(attr)
         assert ei is not None
@@ -331,9 +319,7 @@ class TestHeterogeneousE2E:
     def test_cites_edges(self, hetero_graph_name):
         graph = _connect(hetero_graph_name)
         store = FalkorDBGraphStore(graph)
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
         ei = store._get_edge_index(attr)
         assert ei is not None
@@ -390,9 +376,7 @@ class TestGetRemoteBackendE2E:
         _, graph_store = get_remote_backend(
             host=_HOST, port=_PORT, graph_name=homo_graph_name
         )
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
         ei = graph_store._get_edge_index(attr)
         assert ei is not None
         assert ei[0].shape[0] == 3
@@ -419,9 +403,7 @@ class TestGetRemoteBackendE2E:
         x = feature_store._get_tensor(attr)
         assert x.shape == (3, 2)
 
-        attr = EdgeAttr(
-            edge_type=("Author", "writes", "Paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("Author", "writes", "Paper"), layout=EdgeLayout.COO)
         ei = graph_store._get_edge_index(attr)
         assert ei is not None
         assert ei[0].shape[0] == 3
