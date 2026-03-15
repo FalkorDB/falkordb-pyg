@@ -1,0 +1,65 @@
+[project]
+name = "falkordb-pyg"
+version = "0.1.0"
+description = "PyTorch Geometric remote backend for FalkorDB graph database"
+authors = [
+    {name = "FalkorDB inc", email = "info@falkordb.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["FalkorDB", "PyG", "PyTorch Geometric", "GNN", "GraphDB", "Cypher", "remote backend"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "falkordb>=1.0.0",
+    "torch>=2.0.0",
+    "torch_geometric>=2.4.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=7.0.0",
+    "pytest>=9.0.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/FalkorDB/falkordb-pyg"
+Repository = "https://github.com/FalkorDB/falkordb-pyg"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.11.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+ignore_missing_imports = true
