@@ -108,7 +108,7 @@ The package implements PyG's remote backend protocol:
 - **`lint.yml`**: Runs ruff format, ruff check, and mypy on Python 3.13
 - **`spellcheck.yml`**: Runs pyspelling on all `*.md` files; custom wordlist at `.github/wordlist.txt`
 - **`test.yml`**: Runs pytest against a `falkordb/falkordb:edge` Docker service on Python 3.10–3.13; uploads coverage to Codecov
-- **`pypi-publish.yaml`**: Publishes to PyPI on version tags (`v*.*.*`) using `uv build` and `uv publish`
+- **`publish.yaml`**: Publishes to PyPI on version tags (`v*.*.*`) using `uv build` and `uv publish`
 
 ## Before Finishing a Task
 
