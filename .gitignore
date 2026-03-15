@@ -217,4 +217,3 @@ dist/
 *.egg-info/
 coverage.xml
 wordlist.dic
-uv.lock
