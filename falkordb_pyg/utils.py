@@ -1,109 +1,84 @@
-"""Utility helpers for falkordb-pyg."""
+"""Utility helpers for the FalkorDB PyG backend.
 
-from typing import Dict, List, Optional
+Provides node ID remapping (FalkorDB internal IDs → contiguous 0-based PyG
+indices) and small Cypher query builders used by both stores.
+"""
+
+from typing import Dict, List, Optional, Tuple
 
 
 class NodeIDMapper:
-    """Maps FalkorDB internal node IDs to contiguous 0-based PyG indices.
+    """Bidirectional mapping between FalkorDB internal node IDs and
+    contiguous 0-based PyG node indices.
 
-    FalkorDB uses internal node IDs that may not be contiguous or start at 0.
-    This class builds a bidirectional mapping between FalkorDB IDs and the
-    contiguous 0-based indices that PyG expects.
+    FalkorDB assigns internal integer IDs to nodes that may not be contiguous
+    or start at zero.  PyG's samplers require contiguous indices starting from
+    0, so we maintain an explicit mapping.
+
+    Args:
+        falkordb_ids: Ordered list of FalkorDB node IDs.  Position ``i`` in
+            the list becomes PyG index ``i``.
     """
 
-    def __init__(self) -> None:
-        self._falkordb_to_pyg: Dict[int, int] = {}
-        self._pyg_to_falkordb: List[int] = []
+    def __init__(self, falkordb_ids: List[int]) -> None:
+        self._pyg_to_falkor: List[int] = falkordb_ids
+        self._falkor_to_pyg: Dict[int, int] = {
+            fid: pyg_idx for pyg_idx, fid in enumerate(falkordb_ids)
+        }
 
-    def build(self, falkordb_ids: List[int]) -> None:
-        """Build the mapping from a list of FalkorDB node IDs.
-
-        Args:
-            falkordb_ids: List of FalkorDB internal node IDs (may be unsorted).
-
-        """
-        sorted_ids = sorted(set(falkordb_ids))
-        self._pyg_to_falkordb = sorted_ids
-        self._falkordb_to_pyg = {fid: idx for idx, fid in enumerate(sorted_ids)}
-
-    def to_pyg(self, falkordb_id: int) -> int:
-        """Convert a FalkorDB node ID to a PyG index.
-
-        Args:
-            falkordb_id: FalkorDB internal node ID.
-
-        Returns:
-            Corresponding 0-based PyG index.
-
-        """
-        return self._falkordb_to_pyg[falkordb_id]
-
-    def to_falkordb(self, pyg_idx: int) -> int:
-        """Convert a PyG index to a FalkorDB node ID.
-
-        Args:
-            pyg_idx: 0-based PyG node index.
-
-        Returns:
-            Corresponding FalkorDB internal node ID.
-
-        """
-        return self._pyg_to_falkordb[pyg_idx]
-
-    def __len__(self) -> int:
-        return len(self._pyg_to_falkordb)
+    # ------------------------------------------------------------------
+    # Convenience accessors
+    # ------------------------------------------------------------------
 
     @property
-    def is_built(self) -> bool:
-        """Return True if the mapper has been built."""
-        return len(self._pyg_to_falkordb) > 0
+    def num_nodes(self) -> int:
+        """Total number of nodes tracked by this mapper."""
+        return len(self._pyg_to_falkor)
+
+    def falkor_to_pyg(self, falkor_id: int) -> Optional[int]:
+        """Return the PyG index for a given FalkorDB node ID, or ``None``."""
+        return self._falkor_to_pyg.get(falkor_id)
+
+    def pyg_to_falkor(self, pyg_idx: int) -> int:
+        """Return the FalkorDB node ID for a given PyG index."""
+        return self._pyg_to_falkor[pyg_idx]
+
+    def remap_edges(
+        self, src_ids: List[int], dst_ids: List[int]
+    ) -> Tuple[List[int], List[int]]:
+        """Remap lists of FalkorDB src/dst IDs to PyG indices.
+
+        Pairs where either endpoint is missing from the mapping are silently
+        dropped.
+        """
+        new_src, new_dst = [], []
+        for s, d in zip(src_ids, dst_ids):
+            ps = self._falkor_to_pyg.get(s)
+            pd = self._falkor_to_pyg.get(d)
+            if ps is not None and pd is not None:
+                new_src.append(ps)
+                new_dst.append(pd)
+        return new_src, new_dst
 
 
-def build_node_id_query(label: str) -> str:
-    """Build a Cypher query to fetch all node IDs for a label.
-
-    Args:
-        label: Node label in FalkorDB.
-
-    Returns:
-        Cypher query string.
-
-    """
-    return f"MATCH (n:{label}) RETURN ID(n)"
+# ---------------------------------------------------------------------------
+# Cypher query builders
+# ---------------------------------------------------------------------------
 
 
-def build_feature_query(label: str, property_name: str) -> str:
-    """Build a Cypher query to fetch a node feature by property name.
-
-    Args:
-        label: Node label in FalkorDB.
-        property_name: Property name to fetch.
-
-    Returns:
-        Cypher query string returning (ID(n), n.property) pairs.
-
-    """
-    return f"MATCH (n:{label}) RETURN ID(n), n.{property_name}"
+def build_node_ids_query(label: str) -> str:
+    """Return a Cypher query that fetches all internal node IDs for *label*."""
+    return f"MATCH (n:`{label}`) RETURN ID(n) ORDER BY ID(n)"
 
 
-def build_edge_query(
-    src_label: str,
-    rel_type: str,
-    dst_label: str,
-    src_mapper: Optional[NodeIDMapper] = None,
-    dst_mapper: Optional[NodeIDMapper] = None,
-) -> str:
-    """Build a Cypher query to fetch edge indices.
+def build_feature_query(label: str, prop: str) -> str:
+    """Return a Cypher query that fetches a node property ordered by ID."""
+    return f"MATCH (n:`{label}`) RETURN n.`{prop}`, ID(n) ORDER BY ID(n)"
 
-    Args:
-        src_label: Source node label.
-        rel_type: Relationship type.
-        dst_label: Destination node label.
-        src_mapper: Optional mapper (unused, kept for API consistency).
-        dst_mapper: Optional mapper (unused, kept for API consistency).
 
-    Returns:
-        Cypher query string returning (ID(s), ID(d)) pairs.
-
-    """
-    return f"MATCH (s:{src_label})-[r:{rel_type}]->(d:{dst_label}) RETURN ID(s), ID(d)"
+def build_edge_query(src_label: str, rel_type: str, dst_label: str) -> str:
+    """Return a Cypher query that fetches (src_id, dst_id) for an edge type."""
+    return (
+        f"MATCH (s:`{src_label}`)-[r:`{rel_type}`]->(d:`{dst_label}`) "
+        f"RETURN ID(s), ID(d)"
+    )
