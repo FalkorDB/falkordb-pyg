@@ -24,6 +24,7 @@ def _make_result(rows):
 # Helper: build stores from a shared mock graph
 # ---------------------------------------------------------------------------
 
+
 def _build_stores(graph):
     feature_store = FalkorDBFeatureStore(graph)
     graph_store = FalkorDBGraphStore(graph)
@@ -33,6 +34,7 @@ def _build_stores(graph):
 # ---------------------------------------------------------------------------
 # Tests – factory function
 # ---------------------------------------------------------------------------
+
 
 class TestGetRemoteBackend:
     def test_returns_tuple_of_correct_types(self):
@@ -65,9 +67,7 @@ class TestGetRemoteBackend:
             )
 
         assert graph_store._node_type_to_label == {"paper": "Paper"}
-        assert graph_store._edge_type_to_rel == {
-            ("paper", "cites", "paper"): "CITES"
-        }
+        assert graph_store._edge_type_to_rel == {("paper", "cites", "paper"): "CITES"}
         assert feature_store._node_type_to_label == {"paper": "Paper"}
 
 
@@ -75,20 +75,24 @@ class TestGetRemoteBackend:
 # Tests – homogeneous backend end-to-end
 # ---------------------------------------------------------------------------
 
+
 class TestHomogeneousBackend:
     @pytest.fixture()
     def stores(self):
         # Paper graph: 3 nodes with IDs 0,1,2; edges 0->1, 1->2
         node_result = _make_result([[0], [1], [2]])
         edge_result = _make_result([[0, 1], [1, 2]])
-        x_result = _make_result([
-            [[1.0, 0.0], 0],
-            [[0.0, 1.0], 1],
-            [[1.0, 1.0], 2],
-        ])
+        x_result = _make_result(
+            [
+                [[1.0, 0.0], 0],
+                [[0.0, 1.0], 1],
+                [[1.0, 1.0], 2],
+            ]
+        )
         y_result = _make_result([[0, 0], [1, 1], [0, 2]])
 
         graph = MagicMock()
+
         def _query(q):
             if "RETURN ID(n)" in q:
                 return node_result
@@ -99,6 +103,7 @@ class TestHomogeneousBackend:
             if "n.`y`" in q:
                 return y_result
             raise ValueError(f"Unexpected query: {q}")
+
         graph.query.side_effect = _query
         return _build_stores(graph)
 
@@ -110,9 +115,7 @@ class TestHomogeneousBackend:
 
     def test_graph_store_get_edge_index(self, stores):
         _, graph_store = stores
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
         ei = graph_store._get_edge_index(attr)
         assert ei is not None
         assert torch.equal(ei[0], torch.tensor([0, 1]))
@@ -120,9 +123,7 @@ class TestHomogeneousBackend:
 
     def test_edge_attr_has_correct_size(self, stores):
         _, graph_store = stores
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
         graph_store._get_edge_index(attr)
         attrs = graph_store.get_all_edge_attrs()
         assert len(attrs) == 1
@@ -132,6 +133,7 @@ class TestHomogeneousBackend:
 # ---------------------------------------------------------------------------
 # Tests – heterogeneous backend end-to-end
 # ---------------------------------------------------------------------------
+
 
 class TestHeterogeneousBackend:
     @pytest.fixture()
@@ -144,6 +146,7 @@ class TestHeterogeneousBackend:
         paper_x = _make_result([[[1.0, 0.0], 0], [[0.0, 1.0], 1], [[0.5, 0.5], 2]])
 
         graph = MagicMock()
+
         def _query(q):
             if "`paper`" in q and "RETURN ID(n)" in q:
                 return paper_ids
@@ -158,6 +161,7 @@ class TestHeterogeneousBackend:
             if "`paper`" in q and "n.`x`" in q:
                 return paper_x
             raise ValueError(f"Unexpected query: {q}")
+
         graph.query.side_effect = _query
         return _build_stores(graph)
 
@@ -175,18 +179,14 @@ class TestHeterogeneousBackend:
 
     def test_writes_edges(self, stores):
         _, graph_store = stores
-        attr = EdgeAttr(
-            edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO)
         ei = graph_store._get_edge_index(attr)
         assert ei is not None
         assert ei[0].shape[0] == 3
 
     def test_cites_edges(self, stores):
         _, graph_store = stores
-        attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
         ei = graph_store._get_edge_index(attr)
         assert ei is not None
         assert torch.equal(ei[0], torch.tensor([0, 1]))
@@ -204,6 +204,7 @@ class TestHeterogeneousBackend:
 # Tests – NodeIDMapper integration
 # ---------------------------------------------------------------------------
 
+
 class TestNodeIDMapperIntegration:
     def test_non_contiguous_ids_remapped(self):
         """FalkorDB IDs 100, 200, 300 should map to PyG indices 0, 1, 2."""
@@ -211,18 +212,18 @@ class TestNodeIDMapperIntegration:
         edge_result = _make_result([[100, 200], [200, 300], [100, 300]])
 
         graph = MagicMock()
+
         def _query(q):
             if "RETURN ID(n)" in q:
                 return node_result
             if "RETURN ID(s)" in q:
                 return edge_result
             raise ValueError(q)
+
         graph.query.side_effect = _query
 
         _, graph_store = _build_stores(graph)
-        attr = EdgeAttr(
-            edge_type=("node", "rel", "node"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("node", "rel", "node"), layout=EdgeLayout.COO)
         ei = graph_store._get_edge_index(attr)
         assert torch.equal(ei[0], torch.tensor([0, 1, 0]))
         assert torch.equal(ei[1], torch.tensor([1, 2, 2]))
@@ -234,18 +235,18 @@ class TestNodeIDMapperIntegration:
         edge_result = _make_result([[1, 2], [3, 4]])
 
         graph = MagicMock()
+
         def _query(q):
             if "RETURN ID(n)" in q:
                 return node_result
             if "RETURN ID(s)" in q:
                 return edge_result
             raise ValueError(q)
+
         graph.query.side_effect = _query
 
         _, graph_store = _build_stores(graph)
-        attr = EdgeAttr(
-            edge_type=("node", "rel", "node"), layout=EdgeLayout.COO
-        )
+        attr = EdgeAttr(edge_type=("node", "rel", "node"), layout=EdgeLayout.COO)
         ei = graph_store._get_edge_index(attr)
         # Only the first edge (1->2) should survive
         assert ei[0].shape[0] == 1

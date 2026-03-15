@@ -12,7 +12,7 @@ from torch_geometric.data.feature_store import (
     _FieldStatus,
 )
 
-from .utils import build_feature_query, build_node_ids_query
+from .utils import build_feature_query
 
 
 @dataclass

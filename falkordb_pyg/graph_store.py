@@ -35,12 +35,12 @@ class FalkorDBGraphStore(GraphStore):
         super().__init__()
         self._graph = graph
         self._node_type_to_label: Dict[str, str] = node_type_to_label or {}
-        self._edge_type_to_rel: Dict[Tuple[str, str, str], str] = (
-            edge_type_to_rel or {}
-        )
+        self._edge_type_to_rel: Dict[Tuple[str, str, str], str] = edge_type_to_rel or {}
 
         # Cache: edge_type -> (src_tensor, dst_tensor) in COO format
-        self._edge_index_cache: Dict[Tuple[str, str, str], Tuple[torch.Tensor, torch.Tensor]] = {}
+        self._edge_index_cache: Dict[
+            Tuple[str, str, str], Tuple[torch.Tensor, torch.Tensor]
+        ] = {}
         # Cache: node_type -> NodeIDMapper
         self._id_mappers: Dict[str, NodeIDMapper] = {}
         # Registered edge attrs (populated by put_edge_index or discovered lazily)

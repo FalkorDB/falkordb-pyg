@@ -26,8 +26,6 @@ from torch_geometric.nn import SAGEConv
 
 from falkordb_pyg import get_remote_backend
 from falkordb_pyg.feature_store import FalkorDBTensorAttr
-from falkordb_pyg.graph_store import FalkorDBGraphStore
-
 
 # ---------------------------------------------------------------------------
 # 0. Configuration
@@ -77,9 +75,7 @@ def load_data_into_falkordb(host: str, port: int, graph_name: str) -> None:
             # Store a random 128-D feature vector and a random class label
             feat = [round(torch.randn(1).item(), 4) for _ in range(NUM_FEATURES)]
             label = i % NUM_CLASSES
-            node_clauses.append(
-                f"(:paper {{x: {feat}, y: {label}}})"
-            )
+            node_clauses.append(f"(:paper {{x: {feat}, y: {label}}})")
         graph.query("CREATE " + ", ".join(node_clauses))
 
     print("Creating citation edges …")
@@ -142,7 +138,6 @@ def main():
     )
 
     # --- Pre-fetch features and topology ---
-    from falkordb_pyg.feature_store import FalkorDBTensorAttr
     from torch_geometric.data.graph_store import EdgeAttr, EdgeLayout
 
     x_attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
@@ -150,12 +145,12 @@ def main():
     edge_attr = EdgeAttr(edge_type=EDGE_TYPE, layout=EdgeLayout.COO)
 
     print("Fetching node features …")
-    x = feature_store._get_tensor(x_attr)          # shape: (N, 128)
-    y = feature_store._get_tensor(y_attr).squeeze() # shape: (N,)
+    x = feature_store._get_tensor(x_attr)  # shape: (N, 128)
+    y = feature_store._get_tensor(y_attr).squeeze()  # shape: (N,)
 
     print("Fetching edge index …")
     src, dst = graph_store._get_edge_index(edge_attr)
-    edge_index = torch.stack([src, dst], dim=0)     # shape: (2, E)
+    edge_index = torch.stack([src, dst], dim=0)  # shape: (2, E)
 
     num_nodes = x.shape[0]
     print(f"Graph: {num_nodes} nodes, {edge_index.shape[1]} edges")
@@ -163,8 +158,8 @@ def main():
     # --- Train / val / test split (80/10/10) ---
     perm = torch.randperm(num_nodes)
     train_idx = perm[: int(0.8 * num_nodes)]
-    val_idx = perm[int(0.8 * num_nodes): int(0.9 * num_nodes)]
-    test_idx = perm[int(0.9 * num_nodes):]
+    val_idx = perm[int(0.8 * num_nodes) : int(0.9 * num_nodes)]
+    test_idx = perm[int(0.9 * num_nodes) :]
 
     # --- Model, optimiser ---
     model = GraphSAGE(
