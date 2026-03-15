@@ -448,36 +448,45 @@ version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "falkordb" },
-    { name = "torch" },
-    { name = "torch-geometric" },
 ]
 
 [package.optional-dependencies]
 test = [
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "torch" },
+    { name = "torch-geometric" },
+]
+torch = [
+    { name = "torch" },
+    { name = "torch-geometric" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
     { name = "ruff" },
+    { name = "torch" },
+    { name = "torch-geometric" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "falkordb", specifier = ">=1.0.0" },
+    { name = "falkordb-pyg", extras = ["torch"], marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.2" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=7.0.0" },
-    { name = "torch", specifier = ">=2.0.0" },
-    { name = "torch-geometric", specifier = ">=2.4.0" },
+    { name = "torch", marker = "extra == 'torch'", specifier = ">=2.0.0" },
+    { name = "torch-geometric", marker = "extra == 'torch'", specifier = ">=2.4.0" },
 ]
-provides-extras = ["test"]
+provides-extras = ["torch", "test"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "mypy", specifier = ">=1.11.0" },
     { name = "ruff", specifier = ">=0.8.0" },
+    { name = "torch", specifier = ">=2.0.0" },
+    { name = "torch-geometric", specifier = ">=2.4.0" },
 ]
 
 [[package]]
