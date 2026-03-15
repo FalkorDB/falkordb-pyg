@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 
 import pytest
 import torch
-from torch_geometric.data.feature_store import TensorAttr, _FieldStatus
 
 from falkordb_pyg.feature_store import FalkorDBFeatureStore, FalkorDBTensorAttr
 
@@ -32,29 +31,36 @@ def _make_graph(query_map):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def paper_graph():
     """Mock graph with 'paper' nodes, each having a scalar 'y' label and a
     2-D 'x' feature vector."""
     # Rows: [property_value, node_id]
-    x_result = _make_result([
-        [[1.0, 2.0], 10],
-        [[3.0, 4.0], 11],
-        [[5.0, 6.0], 12],
-    ])
-    y_result = _make_result([
-        [0, 10],
-        [1, 11],
-        [2, 12],
-    ])
+    x_result = _make_result(
+        [
+            [[1.0, 2.0], 10],
+            [[3.0, 4.0], 11],
+            [[5.0, 6.0], 12],
+        ]
+    )
+    y_result = _make_result(
+        [
+            [0, 10],
+            [1, 11],
+            [2, 12],
+        ]
+    )
 
     graph = MagicMock()
+
     def _query(q):
         if "n.`x`" in q:
             return x_result
         if "n.`y`" in q:
             return y_result
         raise ValueError(f"Unexpected query: {q}")
+
     graph.query.side_effect = _query
     return graph
 
@@ -62,6 +68,7 @@ def paper_graph():
 # ---------------------------------------------------------------------------
 # Tests – put / get / remove tensor
 # ---------------------------------------------------------------------------
+
 
 class TestPutGetRemoveTensor:
     def test_put_and_get_full_tensor(self, paper_graph):
@@ -138,6 +145,7 @@ class TestPutGetRemoveTensor:
 # Tests – get_tensor_size
 # ---------------------------------------------------------------------------
 
+
 class TestGetTensorSize:
     def test_returns_correct_shape(self, paper_graph):
         store = FalkorDBFeatureStore(paper_graph)
@@ -157,6 +165,7 @@ class TestGetTensorSize:
 # ---------------------------------------------------------------------------
 # Tests – get_all_tensor_attrs
 # ---------------------------------------------------------------------------
+
 
 class TestGetAllTensorAttrs:
     def test_empty_initially(self):
@@ -186,6 +195,7 @@ class TestGetAllTensorAttrs:
 # Tests – FalkorDBTensorAttr defaults
 # ---------------------------------------------------------------------------
 
+
 class TestFalkorDBTensorAttr:
     def test_index_defaults_to_none(self):
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
@@ -200,6 +210,7 @@ class TestFalkorDBTensorAttr:
 # ---------------------------------------------------------------------------
 # Tests – caching behaviour
 # ---------------------------------------------------------------------------
+
 
 class TestCaching:
     def test_db_not_queried_on_second_get(self, paper_graph):
@@ -227,19 +238,20 @@ class TestCaching:
 # Tests – node type label mapping
 # ---------------------------------------------------------------------------
 
+
 class TestNodeTypeLabelMapping:
     def test_custom_label_used_in_query(self):
         x_result = _make_result([[[1.0, 2.0], 0]])
         graph = MagicMock()
+
         def _query(q):
             if "n.`x`" in q:
                 return x_result
             raise ValueError(q)
+
         graph.query.side_effect = _query
 
-        store = FalkorDBFeatureStore(
-            graph, node_type_to_label={"paper": "Paper"}
-        )
+        store = FalkorDBFeatureStore(graph, node_type_to_label={"paper": "Paper"})
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
         store._get_tensor(attr)
 
