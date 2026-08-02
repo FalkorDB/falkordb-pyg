@@ -1,12 +1,15 @@
-"""Full training example: train a GraphSAGE model on a graph stored in FalkorDB.
+"""Full-batch training example: GraphSAGE on a graph stored in FalkorDB.
 
-This example mirrors the style of PyG's Kùzu papers_100M example.
+This script fetches the whole graph from FalkorDB once and then trains on it
+in full batches.  It is *not* a mini-batch/NeighborLoader example — see the
+README's "Current limitations" for why the loader path still needs the node and
+edge types to be primed first.
 
 Prerequisites
 -------------
 1. Install dependencies::
 
-       pip install falkordb-pyg torch torch_geometric
+       pip install 'falkordb-pyg[torch]'
 
 2. Start FalkorDB (requires Docker)::
 
@@ -25,7 +28,6 @@ import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv
 
 from falkordb_pyg import get_remote_backend
-from falkordb_pyg.feature_store import FalkorDBTensorAttr
 
 # ---------------------------------------------------------------------------
 # 0. Configuration
@@ -65,35 +67,48 @@ def load_data_into_falkordb(host: str, port: int, graph_name: str) -> None:
 
     graph = db.select_graph(graph_name)
 
+    torch.manual_seed(42)
+
     print(f"Creating {NUM_PAPERS} paper nodes …")
-    # Create nodes in batches of 100 to keep query sizes manageable
-    batch = 100
+    # Batch with a parameterised UNWIND: one round-trip per chunk, and values
+    # are bound rather than interpolated into the query text.
+    batch = 500
     for start in range(0, NUM_PAPERS, batch):
         end = min(start + batch, NUM_PAPERS)
-        node_clauses = []
-        for i in range(start, end):
-            # Store a random 128-D feature vector and a random class label
-            feat = [round(torch.randn(1).item(), 4) for _ in range(NUM_FEATURES)]
-            label = i % NUM_CLASSES
-            node_clauses.append(f"(:paper {{x: {feat}, y: {label}}})")
-        graph.query("CREATE " + ", ".join(node_clauses))
+        rows = [
+            {
+                "pid": i,
+                "x": [round(v, 4) for v in torch.randn(NUM_FEATURES).tolist()],
+                "y": i % NUM_CLASSES,
+            }
+            for i in range(start, end)
+        ]
+        graph.query(
+            "UNWIND $rows AS row CREATE (:paper {pid: row.pid, x: row.x, y: row.y})",
+            params={"rows": rows},
+        )
+
+    # Address nodes by our own key, never by ID(n): FalkorDB reuses internal
+    # IDs after deletes and does not promise they start at zero.
+    graph.query("CREATE INDEX FOR (p:paper) ON (p.pid)")
 
     print("Creating citation edges …")
-    # Each paper cites ~5 random others
-    torch.manual_seed(42)
+    # Each paper cites ~5 random others.
+    edges = []
     for src in range(NUM_PAPERS):
-        targets = torch.randint(0, NUM_PAPERS, (5,)).tolist()
-        targets = [t for t in targets if t != src]
-        if not targets:
-            continue
-        match_clause = f"MATCH (s:paper) WHERE ID(s) = {src}"
-        for dst in targets:
-            graph.query(
-                f"{match_clause} MATCH (d:paper) WHERE ID(d) = {dst} "
-                f"CREATE (s)-[:cites]->(d)"
-            )
+        for dst in torch.randint(0, NUM_PAPERS, (5,)).tolist():
+            if dst != src:
+                edges.append({"src": src, "dst": dst})
 
-    print("Data loaded.")
+    for start in range(0, len(edges), batch):
+        graph.query(
+            "UNWIND $rows AS row "
+            "MATCH (s:paper {pid: row.src}), (d:paper {pid: row.dst}) "
+            "CREATE (s)-[:cites]->(d)",
+            params={"rows": edges[start : start + batch]},
+        )
+
+    print(f"Data loaded: {NUM_PAPERS} nodes, {len(edges)} edges.")
 
 
 # ---------------------------------------------------------------------------
@@ -137,19 +152,13 @@ def main():
         graph_name=GRAPH_NAME,
     )
 
-    # --- Pre-fetch features and topology ---
-    from torch_geometric.data.graph_store import EdgeAttr, EdgeLayout
-
-    x_attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-    y_attr = FalkorDBTensorAttr(group_name="paper", attr_name="y")
-    edge_attr = EdgeAttr(edge_type=EDGE_TYPE, layout=EdgeLayout.COO)
-
+    # --- Pre-fetch features and topology (public API) ---
     print("Fetching node features …")
-    x = feature_store._get_tensor(x_attr)  # shape: (N, 128)
-    y = feature_store._get_tensor(y_attr).squeeze()  # shape: (N,)
+    x = feature_store.get_tensor("paper", "x")  # shape: (N, 128), float
+    y = feature_store.get_tensor("paper", "y").squeeze(1)  # shape: (N,), int64
 
     print("Fetching edge index …")
-    src, dst = graph_store._get_edge_index(edge_attr)
+    src, dst = graph_store.get_edge_index(EDGE_TYPE, layout="coo")
     edge_index = torch.stack([src, dst], dim=0)  # shape: (2, E)
 
     num_nodes = x.shape[0]
@@ -173,7 +182,7 @@ def main():
         model.train()
         optimiser.zero_grad()
         out = model(x, edge_index)
-        loss = F.cross_entropy(out[train_idx], y[train_idx].long())
+        loss = F.cross_entropy(out[train_idx], y[train_idx])
         loss.backward()
         optimiser.step()
         return float(loss)
@@ -185,7 +194,7 @@ def main():
         pred = out.argmax(dim=-1)
         accs = {}
         for split, idx in [("train", train_idx), ("val", val_idx), ("test", test_idx)]:
-            accs[split] = float((pred[idx] == y[idx].long()).float().mean())
+            accs[split] = float((pred[idx] == y[idx]).float().mean())
         return accs
 
     # --- Training loop ---
