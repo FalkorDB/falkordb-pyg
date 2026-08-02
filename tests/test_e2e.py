@@ -142,7 +142,7 @@ class TestFeatureStoreE2E:
         store = FalkorDBFeatureStore(graph)
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
 
-        x = store._get_tensor(attr)
+        x = store.get_tensor(attr)
         assert x.shape == (3, 2)
         # Values should be the ones we inserted (sorted by ID)
         assert x.dtype == torch.float
@@ -152,7 +152,7 @@ class TestFeatureStoreE2E:
         store = FalkorDBFeatureStore(graph)
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="y")
 
-        y = store._get_tensor(attr)
+        y = store.get_tensor(attr)
         assert y.shape == (3, 1)
         # Labels 0, 1, 2 in order
         assert set(y.squeeze().tolist()) == {0.0, 1.0, 2.0}
@@ -163,12 +163,12 @@ class TestFeatureStoreE2E:
 
         # First load full tensor
         full_attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        full = store._get_tensor(full_attr)
+        full = store.get_tensor(full_attr)
 
         # Then access with index
         idx = torch.tensor([0, 2])
         indexed_attr = FalkorDBTensorAttr(group_name="paper", attr_name="x", index=idx)
-        indexed = store._get_tensor(indexed_attr)
+        indexed = store.get_tensor(indexed_attr)
         assert indexed.shape == (2, 2)
         assert torch.equal(indexed, full[idx])
 
@@ -177,16 +177,35 @@ class TestFeatureStoreE2E:
         store = FalkorDBFeatureStore(graph)
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
 
-        first = store._get_tensor(attr)
-        second = store._get_tensor(attr)
-        # Same object reference means it came from cache
-        assert first is second
+        calls = []
+        original = graph.query
+        graph.query = lambda q, *a, **kw: (calls.append(q), original(q, *a, **kw))[1]
+
+        first = store.get_tensor(attr)
+        assert len(calls) == 1
+        second = store.get_tensor(attr)
+        assert len(calls) == 1  # served from cache
+        assert torch.equal(first, second)
+
+    def test_returned_tensors_are_not_cache_aliases(self, homo_graph_name):
+        graph = _connect(homo_graph_name)
+        store = FalkorDBFeatureStore(graph)
+        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
+
+        store.get_tensor(attr)[0, 0] = 999.0
+        assert store.get_tensor(attr)[0, 0].item() != 999.0
+
+    def test_integer_labels_keep_integer_dtype(self, homo_graph_name):
+        graph = _connect(homo_graph_name)
+        store = FalkorDBFeatureStore(graph)
+        y = store.get_tensor(FalkorDBTensorAttr(group_name="paper", attr_name="y"))
+        assert y.dtype == torch.long
 
     def test_get_tensor_size(self, homo_graph_name):
         graph = _connect(homo_graph_name)
         store = FalkorDBFeatureStore(graph)
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        assert store._get_tensor_size(attr) == (3, 2)
+        assert store.get_tensor_size(attr) == (3, 2)
 
     def test_put_and_remove_tensor(self, homo_graph_name):
         graph = _connect(homo_graph_name)
@@ -194,17 +213,17 @@ class TestFeatureStoreE2E:
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="z")
 
         tensor = torch.randn(3, 8)
-        assert store._put_tensor(tensor, attr) is True
-        assert torch.equal(store._get_tensor(attr), tensor)
-        assert store._remove_tensor(attr) is True
-        assert store._remove_tensor(attr) is False
+        assert store.put_tensor(tensor, attr) is True
+        assert torch.equal(store.get_tensor(attr), tensor)
+        assert store.remove_tensor(attr) is True
+        assert store.remove_tensor(attr) is False
 
     def test_get_all_tensor_attrs(self, homo_graph_name):
         graph = _connect(homo_graph_name)
         store = FalkorDBFeatureStore(graph)
 
-        store._get_tensor(FalkorDBTensorAttr(group_name="paper", attr_name="x"))
-        store._get_tensor(FalkorDBTensorAttr(group_name="paper", attr_name="y"))
+        store.get_tensor(FalkorDBTensorAttr(group_name="paper", attr_name="x"))
+        store.get_tensor(FalkorDBTensorAttr(group_name="paper", attr_name="y"))
 
         attrs = store.get_all_tensor_attrs()
         names = {a.attr_name for a in attrs}
@@ -294,7 +313,7 @@ class TestHeterogeneousE2E:
         store = FalkorDBFeatureStore(graph)
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
 
-        x = store._get_tensor(attr)
+        x = store.get_tensor(attr)
         assert x.shape == (3, 2)
 
     def test_author_features(self, hetero_graph_name):
@@ -302,7 +321,7 @@ class TestHeterogeneousE2E:
         store = FalkorDBFeatureStore(graph)
         attr = FalkorDBTensorAttr(group_name="author", attr_name="x")
 
-        x = store._get_tensor(attr)
+        x = store.get_tensor(attr)
         assert x.shape == (2, 2)
 
     def test_writes_edges(self, hetero_graph_name):
@@ -367,7 +386,7 @@ class TestGetRemoteBackendE2E:
             host=_HOST, port=_PORT, graph_name=homo_graph_name
         )
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        x = feature_store._get_tensor(attr)
+        x = feature_store.get_tensor(attr)
         assert x.shape == (3, 2)
 
     def test_edge_access_through_backend(self, homo_graph_name):
@@ -398,7 +417,7 @@ class TestGetRemoteBackendE2E:
         )
 
         attr = FalkorDBTensorAttr(group_name="Paper", attr_name="x")
-        x = feature_store._get_tensor(attr)
+        x = feature_store.get_tensor(attr)
         assert x.shape == (3, 2)
 
         attr = EdgeAttr(edge_type=("Author", "writes", "Paper"), layout=EdgeLayout.COO)
