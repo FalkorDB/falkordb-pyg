@@ -6,19 +6,43 @@ Exports the main classes and the convenience factory function
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
 from typing import Dict, Optional, Tuple
 
 from falkordb import FalkorDB
 
-from .feature_store import FalkorDBFeatureStore, FalkorDBTensorAttr
-from .graph_store import FalkorDBGraphStore
+try:
+    from .feature_store import FalkorDBFeatureStore, FalkorDBTensorAttr
+    from .graph_store import FalkorDBGraphStore
+except ImportError as exc:  # pragma: no cover - depends on the install extras
+    # Only rewrite a genuinely missing optional dependency. Rewriting every
+    # ImportError would bury real bugs inside the stores, or a version mismatch
+    # inside torch_geometric, under a misleading "install torch" message.
+    if (exc.name or "").split(".")[0] not in {"torch", "torch_geometric"}:
+        raise
+    raise ImportError(
+        "falkordb-pyg requires PyTorch and PyTorch Geometric, which are not "
+        "installed. Install them for your platform following "
+        "https://pytorch.org/get-started/locally/ and "
+        "https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html, "
+        "or install this package with its optional extra: "
+        "pip install 'falkordb-pyg[torch]'"
+    ) from exc
+
 from .utils import NodeIDMapper
+
+try:
+    __version__ = _version("falkordb-pyg")
+except PackageNotFoundError:  # pragma: no cover - running from a source tree
+    __version__ = "0.0.0.dev0"
 
 __all__ = [
     "FalkorDBFeatureStore",
     "FalkorDBGraphStore",
     "FalkorDBTensorAttr",
     "NodeIDMapper",
+    "__version__",
     "get_remote_backend",
 ]
 

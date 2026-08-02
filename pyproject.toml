@@ -56,6 +56,28 @@ dev = [
     "torch_geometric>=2.4.0",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["falkordb_pyg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config -ra"
+markers = [
+    "e2e: end-to-end tests requiring a running FalkorDB server",
+]
+
+[tool.coverage.run]
+source = ["falkordb_pyg"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 88

@@ -14,12 +14,18 @@ jobs:
   test:
     name: Test with Python ${{ matrix.python }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     services:
       falkordb:
         image: falkordb/falkordb:edge
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     strategy:
       matrix:
@@ -28,6 +34,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -39,10 +47,14 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra test
+        run: uv sync --locked --extra test
 
       - name: Run Tests
-        run: uv run pytest --cov --cov-report=xml
+        # REQUIRE_FALKORDB turns an unreachable server into a failure instead of
+        # silently skipping the whole e2e suite behind a green badge.
+        env:
+          REQUIRE_FALKORDB: '1'
+        run: uv run pytest --cov --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
@@ -50,3 +62,42 @@ jobs:
         with:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Build
+        run: uv build
+
+      - name: Check metadata
+        run: uvx twine check dist/*
+
+      - name: py.typed must ship in the wheel
+        # Without it every downstream type-checker sees the package as untyped.
+        run: unzip -l dist/*.whl | grep -q 'falkordb_pyg/py.typed'
+
+      - name: Import without the torch extra must fail helpfully
+        # `pip install falkordb-pyg` does not pull torch; the error a user sees
+        # must name this package and how to fix it, not just 'No module torch'.
+        run: |
+          python -m venv /tmp/bare
+          /tmp/bare/bin/pip install --quiet dist/*.whl
+          /tmp/bare/bin/python - <<'PY'
+          import sys
+          try:
+              import falkordb_pyg
+          except ImportError as exc:
+              assert "falkordb-pyg[torch]" in str(exc), f"unhelpful error: {exc}"
+              print("OK:", exc)
+              sys.exit(0)
+          sys.exit("expected an ImportError without the torch extra")
+          PY
