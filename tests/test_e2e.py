@@ -11,7 +11,6 @@ Start a local FalkorDB instance with::
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
@@ -26,9 +25,8 @@ from falkordb_pyg.graph_store import FalkorDBGraphStore
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_HOST = os.environ.get("FALKORDB_HOST", "localhost")
-_PORT = int(os.environ.get("FALKORDB_PORT", "6379"))
+from .conftest import falkordb_host as _HOST
+from .conftest import falkordb_port as _PORT
 
 
 def _unique_graph_name() -> str:
