@@ -68,6 +68,9 @@ class FakeFalkorGraph:
         self.calls.append(q)
         return self._dispatch(q)
 
+    def ro_query(self, q: str, params: Optional[dict] = None, **kwargs) -> FakeResult:
+        return self.query(q, params, **kwargs)
+
     # -- internals ----------------------------------------------------------
 
     def _dispatch(self, q: str) -> FakeResult:
@@ -138,6 +141,21 @@ def hetero_graph() -> FakeFalkorGraph:
             ("paper", "cites", "paper"): [(0, 1), (1, 2)],
         },
     )
+
+
+@pytest.fixture()
+def legacy_graph(homo_graph) -> Any:
+    """A graph handle with no ``ro_query``, as an older falkordb client had."""
+
+    class LegacyGraph:
+        def __init__(self, inner: FakeFalkorGraph) -> None:
+            self._inner = inner
+            self.calls = inner.calls
+
+        def query(self, q: str, params: Optional[dict] = None, **kwargs):
+            return self._inner.query(q, params, **kwargs)
+
+    return LegacyGraph(homo_graph)
 
 
 # ---------------------------------------------------------------------------

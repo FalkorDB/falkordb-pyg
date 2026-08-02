@@ -29,6 +29,8 @@ class FalkorDBGraphStore(GraphStore):
         edge_type_to_rel: Optional mapping from PyG edge type triples
             ``(src_type, rel_type, dst_type)`` to FalkorDB relationship type
             strings.  Defaults to using the middle element of the triple.
+        read_only: Issue reads with ``GRAPH.RO_QUERY`` so they can be served
+            by a replica.  Set to ``False`` for servers without RO_QUERY.
     """
 
     def __init__(
@@ -36,11 +38,13 @@ class FalkorDBGraphStore(GraphStore):
         graph,
         node_type_to_label: Optional[Dict[str, str]] = None,
         edge_type_to_rel: Optional[Dict[EdgeType, str]] = None,
+        read_only: bool = True,
     ) -> None:
         super().__init__()
         self._graph = graph
         self._node_type_to_label: Dict[str, str] = node_type_to_label or {}
         self._edge_type_to_rel: Dict[EdgeType, str] = edge_type_to_rel or {}
+        self._read_only = read_only
 
         # Cache: (edge_type, layout) -> (row_tensor, col_tensor)
         self._edge_index_cache: Dict[Tuple[EdgeType, EdgeLayout], EdgeTensors] = {}
@@ -55,6 +59,27 @@ class FalkorDBGraphStore(GraphStore):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _execute(self, query: str, **kwargs):
+        """Run a read-only Cypher query against FalkorDB.
+
+        Falls back to ``query`` when the handle predates ``ro_query`` (or is a
+        stand-in that does not implement it), so a caller-supplied graph from an
+        older client degrades instead of raising ``AttributeError`` mid-epoch.
+        """
+        if self._read_only:
+            ro_query = getattr(self._graph, "ro_query", None)
+            if ro_query is not None:
+                return ro_query(query, **kwargs)
+            warnings.warn(
+                "The supplied FalkorDB graph handle has no ro_query(); falling "
+                "back to query(). Reads will not be servable by a replica. "
+                "Upgrade the falkordb client or pass read_only=False to silence "
+                "this.",
+                stacklevel=3,
+            )
+            self._read_only = False
+        return self._graph.query(query, **kwargs)
+
     def _label(self, node_type: str) -> str:
         """Resolve a PyG node type to a FalkorDB label."""
         return self._node_type_to_label.get(node_type, node_type)
@@ -67,7 +92,7 @@ class FalkorDBGraphStore(GraphStore):
         """Return (and cache) the NodeIDMapper for *node_type*."""
         if node_type not in self._id_mappers:
             label = self._label(node_type)
-            result = self._graph.query(build_node_ids_query(label))
+            result = self._execute(build_node_ids_query(label))
             ids = [int(row[0]) for row in result.result_set]
             self._id_mappers[node_type] = NodeIDMapper(ids)
         return self._id_mappers[node_type]
@@ -87,7 +112,7 @@ class FalkorDBGraphStore(GraphStore):
         src_label = self._label(src_type)
         dst_label = self._label(dst_type)
 
-        result = self._graph.query(build_edge_query(src_label, rel, dst_label))
+        result = self._execute(build_edge_query(src_label, rel, dst_label))
 
         src_mapper = self._get_or_build_mapper(src_type)
         dst_mapper = self._get_or_build_mapper(dst_type)

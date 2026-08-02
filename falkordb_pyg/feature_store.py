@@ -57,6 +57,8 @@ class FalkorDBFeatureStore(FeatureStore):
             FalkorDB node labels.  Defaults to the identity mapping.
         dtypes: Optional mapping from ``(group_name, attr_name)`` to an
             explicit :class:`torch.dtype`, overriding inference.
+        read_only: Issue reads with ``GRAPH.RO_QUERY`` so they can be served
+            by a replica.  Set to ``False`` for servers without RO_QUERY.
     """
 
     def __init__(
@@ -64,11 +66,13 @@ class FalkorDBFeatureStore(FeatureStore):
         graph,
         node_type_to_label: Optional[Dict[str, str]] = None,
         dtypes: Optional[Dict[Tuple[str, str], torch.dtype]] = None,
+        read_only: bool = True,
     ) -> None:
         super().__init__(tensor_attr_cls=FalkorDBTensorAttr)
         self._graph = graph
         self._node_type_to_label: Dict[str, str] = node_type_to_label or {}
         self._dtypes: Dict[Tuple[str, str], torch.dtype] = dtypes or {}
+        self._read_only = read_only
 
         # Cache: (group_name, attr_name) -> full tensor
         self._tensor_cache: Dict[Tuple, torch.Tensor] = {}
@@ -78,6 +82,27 @@ class FalkorDBFeatureStore(FeatureStore):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _execute(self, query: str, **kwargs):
+        """Run a read-only Cypher query against FalkorDB.
+
+        Falls back to ``query`` when the handle predates ``ro_query`` (or is a
+        stand-in that does not implement it), so a caller-supplied graph from an
+        older client degrades instead of raising ``AttributeError`` mid-epoch.
+        """
+        if self._read_only:
+            ro_query = getattr(self._graph, "ro_query", None)
+            if ro_query is not None:
+                return ro_query(query, **kwargs)
+            warnings.warn(
+                "The supplied FalkorDB graph handle has no ro_query(); falling "
+                "back to query(). Reads will not be servable by a replica. "
+                "Upgrade the falkordb client or pass read_only=False to silence "
+                "this.",
+                stacklevel=3,
+            )
+            self._read_only = False
+        return self._graph.query(query, **kwargs)
 
     def _label(self, group_name: Union[str, Tuple]) -> str:
         """Resolve a PyG group name (node type) to a FalkorDB label.
@@ -191,7 +216,7 @@ class FalkorDBFeatureStore(FeatureStore):
         """Query FalkorDB and return the full feature tensor for *attr*."""
         label = self._label(attr.group_name)
         prop = attr.attr_name
-        result = self._graph.query(build_feature_query(label, prop))
+        result = self._execute(build_feature_query(label, prop))
 
         rows = result.result_set
         if not rows:
