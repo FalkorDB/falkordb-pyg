@@ -23,7 +23,8 @@ _FEATURE_RE = re.compile(
     rf"^MATCH \(n:{_IDENT}\) RETURN n\.{_IDENT}, ID\(n\) ORDER BY ID\(n\)$"
 )
 _EDGE_RE = re.compile(
-    rf"^MATCH \(s:{_IDENT}\)-\[r:{_IDENT}\]->\(d:{_IDENT}\) RETURN ID\(s\), ID\(d\)$"
+    rf"^MATCH \(s:{_IDENT}\)-\[r:{_IDENT}\]->\(d:{_IDENT}\) "
+    rf"RETURN ID\(s\), ID\(d\), ID\(r\)$"
 )
 
 
@@ -88,7 +89,14 @@ class FakeFalkorGraph:
                 _unescape(match.group(2)),
                 _unescape(match.group(3)),
             )
-            return FakeResult([list(pair) for pair in self.edges.get(key, [])])
+            # Each relationship is its own row, with a synthetic ID(r) — a real
+            # server returns one row per relationship, including parallel edges.
+            return FakeResult(
+                [
+                    [src, dst, rel_id]
+                    for rel_id, (src, dst) in enumerate(self.edges.get(key, []))
+                ]
+            )
 
         raise AssertionError(f"FakeFalkorGraph received an unrecognised query: {q!r}")
 

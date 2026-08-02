@@ -1,6 +1,11 @@
-"""Integration tests that exercise the full Remote Backend stack with mocked
-FalkorDB calls, verifying that the NeighborLoader-compatible interface works
-end-to-end.
+"""Integration tests for the full Remote Backend stack against a fake FalkorDB.
+
+These exercise what PyG itself calls: the metadata that :class:`NeighborSampler`
+reads off the two stores, and the factory that wires them together.
+
+Note that iterating a :class:`~torch_geometric.loader.NeighborLoader` also needs
+``pyg-lib`` or ``torch-sparse``, which are not declared dependencies; these tests
+therefore assert on the sampler's view of the graph rather than on batches.
 """
 
 from unittest.mock import MagicMock, patch
@@ -8,27 +13,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 from torch_geometric.data.graph_store import EdgeAttr, EdgeLayout
+from torch_geometric.sampler import NeighborSampler
 
 from falkordb_pyg import get_remote_backend
-from falkordb_pyg.feature_store import FalkorDBFeatureStore, FalkorDBTensorAttr
+from falkordb_pyg.feature_store import FalkorDBFeatureStore
 from falkordb_pyg.graph_store import FalkorDBGraphStore
 
+from .conftest import FakeFalkorGraph
 
-def _make_result(rows):
-    result = MagicMock()
-    result.result_set = rows
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Helper: build stores from a shared mock graph
-# ---------------------------------------------------------------------------
+PAPER_CITES = ("paper", "cites", "paper")
+AUTHOR_WRITES = ("author", "writes", "paper")
 
 
-def _build_stores(graph):
-    feature_store = FalkorDBFeatureStore(graph)
-    graph_store = FalkorDBGraphStore(graph)
-    return feature_store, graph_store
+def _stores(graph):
+    return FalkorDBFeatureStore(graph), FalkorDBGraphStore(graph)
 
 
 # ---------------------------------------------------------------------------
@@ -39,216 +37,183 @@ def _build_stores(graph):
 class TestGetRemoteBackend:
     def test_returns_tuple_of_correct_types(self):
         with patch("falkordb_pyg.FalkorDB") as mock_falkordb:
-            mock_db = MagicMock()
-            mock_graph = MagicMock()
-            mock_falkordb.return_value = mock_db
-            mock_db.select_graph.return_value = mock_graph
-
-            feature_store, graph_store = get_remote_backend(
-                host="localhost", port=6379, graph_name="test"
-            )
-
+            mock_falkordb.return_value.select_graph.return_value = MagicMock()
+            feature_store, graph_store = get_remote_backend(graph_name="test")
         assert isinstance(feature_store, FalkorDBFeatureStore)
         assert isinstance(graph_store, FalkorDBGraphStore)
 
     def test_custom_mappings_forwarded(self):
         with patch("falkordb_pyg.FalkorDB") as mock_falkordb:
-            mock_db = MagicMock()
-            mock_graph = MagicMock()
-            mock_falkordb.return_value = mock_db
-            mock_db.select_graph.return_value = mock_graph
-
+            mock_falkordb.return_value.select_graph.return_value = MagicMock()
             feature_store, graph_store = get_remote_backend(
-                host="host",
-                port=1234,
                 graph_name="g",
                 node_type_to_label={"paper": "Paper"},
-                edge_type_to_rel={("paper", "cites", "paper"): "CITES"},
+                edge_type_to_rel={PAPER_CITES: "CITES"},
             )
-
         assert graph_store._node_type_to_label == {"paper": "Paper"}
-        assert graph_store._edge_type_to_rel == {("paper", "cites", "paper"): "CITES"}
+        assert graph_store._edge_type_to_rel == {PAPER_CITES: "CITES"}
         assert feature_store._node_type_to_label == {"paper": "Paper"}
 
+    def test_version_is_exported(self):
+        import falkordb_pyg
 
-# ---------------------------------------------------------------------------
-# Tests – homogeneous backend end-to-end
-# ---------------------------------------------------------------------------
-
-
-class TestHomogeneousBackend:
-    @pytest.fixture()
-    def stores(self):
-        # Paper graph: 3 nodes with IDs 0,1,2; edges 0->1, 1->2
-        node_result = _make_result([[0], [1], [2]])
-        edge_result = _make_result([[0, 1], [1, 2]])
-        x_result = _make_result(
-            [
-                [[1.0, 0.0], 0],
-                [[0.0, 1.0], 1],
-                [[1.0, 1.0], 2],
-            ]
-        )
-        y_result = _make_result([[0, 0], [1, 1], [0, 2]])
-
-        graph = MagicMock()
-
-        def _query(q):
-            if "RETURN ID(n)" in q:
-                return node_result
-            if "RETURN ID(s)" in q:
-                return edge_result
-            if "n.`x`" in q:
-                return x_result
-            if "n.`y`" in q:
-                return y_result
-            raise ValueError(f"Unexpected query: {q}")
-
-        graph.query.side_effect = _query
-        return _build_stores(graph)
-
-    def test_feature_store_get_x(self, stores):
-        feature_store, _ = stores
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        x = feature_store._get_tensor(attr)
-        assert x.shape == (3, 2)
-
-    def test_graph_store_get_edge_index(self, stores):
-        _, graph_store = stores
-        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
-        ei = graph_store._get_edge_index(attr)
-        assert ei is not None
-        assert torch.equal(ei[0], torch.tensor([0, 1]))
-        assert torch.equal(ei[1], torch.tensor([1, 2]))
-
-    def test_edge_attr_has_correct_size(self, stores):
-        _, graph_store = stores
-        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
-        graph_store._get_edge_index(attr)
-        attrs = graph_store.get_all_edge_attrs()
-        assert len(attrs) == 1
-        assert attrs[0].size == (3, 3)
+        assert isinstance(falkordb_pyg.__version__, str)
 
 
 # ---------------------------------------------------------------------------
-# Tests – heterogeneous backend end-to-end
+# Tests – what PyG's sampler sees
+# ---------------------------------------------------------------------------
+
+
+class TestSamplerMetadata:
+    def test_primed_backend_is_visible_to_neighbor_sampler(self, homo_graph):
+        feature_store, graph_store = _stores(homo_graph)
+
+        # Prime the types the loader will sample (see README Quick Start).
+        feature_store.get_tensor_size("paper", "x")
+        graph_store.get_edge_index(PAPER_CITES, layout="coo")
+
+        sampler = NeighborSampler((feature_store, graph_store), num_neighbors=[2, 2])
+        assert sampler.node_types == ["paper"]
+        assert sampler.edge_types == [PAPER_CITES]
+        assert sampler.num_nodes == {"paper": 3}
+
+    def test_hetero_backend_is_visible_to_neighbor_sampler(self, hetero_graph):
+        feature_store, graph_store = _stores(hetero_graph)
+        for node_type in ("paper", "author"):
+            feature_store.get_tensor_size(node_type, "x")
+        for edge_type in (PAPER_CITES, AUTHOR_WRITES):
+            graph_store.get_edge_index(edge_type, layout="coo")
+
+        sampler = NeighborSampler((feature_store, graph_store), num_neighbors=[2])
+        assert set(sampler.node_types) == {"paper", "author"}
+        assert set(sampler.edge_types) == {PAPER_CITES, AUTHOR_WRITES}
+        assert sampler.num_nodes == {"paper": 3, "author": 2}
+
+    def test_sampler_metadata_survives_repeated_reads(self, homo_graph):
+        """Guards the attr-registry leak: a second sampler must see the same graph."""
+        feature_store, graph_store = _stores(homo_graph)
+        feature_store.get_tensor_size("paper", "x")
+        graph_store.get_edge_index(PAPER_CITES, layout="coo")
+
+        first = NeighborSampler((feature_store, graph_store), num_neighbors=[2])
+        second = NeighborSampler((feature_store, graph_store), num_neighbors=[2])
+        assert first.num_nodes == second.num_nodes == {"paper": 3}
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Schema auto-discovery is not implemented (planned for v0.3.0): a "
+            "cold backend advertises no node or edge types, so NeighborLoader "
+            "silently samples an empty graph. See README 'Current limitations'."
+        ),
+    )
+    def test_cold_backend_is_visible_to_neighbor_sampler(self, homo_graph):
+        feature_store, graph_store = _stores(homo_graph)
+        sampler = NeighborSampler((feature_store, graph_store), num_neighbors=[2, 2])
+        assert sampler.edge_types == [PAPER_CITES]
+
+    def test_cold_backend_reports_nothing_and_queries_nothing(self, homo_graph):
+        """Pins the current behaviour so the v0.3.0 fix is a visible change."""
+        feature_store, graph_store = _stores(homo_graph)
+        assert feature_store.get_all_tensor_attrs() == []
+        assert graph_store.get_all_edge_attrs() == []
+        assert homo_graph.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Tests – heterogeneous data flow
 # ---------------------------------------------------------------------------
 
 
 class TestHeterogeneousBackend:
-    @pytest.fixture()
-    def stores(self):
-        paper_ids = _make_result([[0], [1], [2]])
-        author_ids = _make_result([[10], [11]])
-        writes_edges = _make_result([[10, 0], [10, 1], [11, 2]])
-        cites_edges = _make_result([[0, 1], [1, 2]])
-        author_x = _make_result([[[0.5, 0.5], 10], [[0.1, 0.9], 11]])
-        paper_x = _make_result([[[1.0, 0.0], 0], [[0.0, 1.0], 1], [[0.5, 0.5], 2]])
+    def test_features_per_node_type(self, hetero_graph):
+        feature_store, _ = _stores(hetero_graph)
+        assert feature_store.get_tensor("paper", "x").shape == (3, 2)
+        assert feature_store.get_tensor("author", "x").shape == (2, 2)
 
-        graph = MagicMock()
+    def test_edges_per_edge_type_are_independent(self, hetero_graph):
+        _, graph_store = _stores(hetero_graph)
+        writes, _ = graph_store.get_edge_index(AUTHOR_WRITES, layout="coo")
+        cites, _ = graph_store.get_edge_index(PAPER_CITES, layout="coo")
+        assert writes.shape[0] == 3
+        assert cites.shape[0] == 2
 
-        def _query(q):
-            if "`paper`" in q and "RETURN ID(n)" in q:
-                return paper_ids
-            if "`author`" in q and "RETURN ID(n)" in q:
-                return author_ids
-            if "`writes`" in q:
-                return writes_edges
-            if "`cites`" in q:
-                return cites_edges
-            if "`author`" in q and "n.`x`" in q:
-                return author_x
-            if "`paper`" in q and "n.`x`" in q:
-                return paper_x
-            raise ValueError(f"Unexpected query: {q}")
+    def test_cross_type_edges_use_the_right_mappers(self, hetero_graph):
+        """author IDs 10,11 -> 0,1 and paper IDs 0,1,2 -> 0,1,2."""
+        _, graph_store = _stores(hetero_graph)
+        row, col = graph_store.get_edge_index(AUTHOR_WRITES, layout="coo")
+        assert row.tolist() == [0, 0, 1]
+        assert col.tolist() == [0, 1, 2]
 
-        graph.query.side_effect = _query
-        return _build_stores(graph)
-
-    def test_paper_features(self, stores):
-        feature_store, _ = stores
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        x = feature_store._get_tensor(attr)
-        assert x.shape == (3, 2)
-
-    def test_author_features(self, stores):
-        feature_store, _ = stores
-        attr = FalkorDBTensorAttr(group_name="author", attr_name="x")
-        x = feature_store._get_tensor(attr)
-        assert x.shape == (2, 2)
-
-    def test_writes_edges(self, stores):
-        _, graph_store = stores
-        attr = EdgeAttr(edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO)
-        ei = graph_store._get_edge_index(attr)
-        assert ei is not None
-        assert ei[0].shape[0] == 3
-
-    def test_cites_edges(self, stores):
-        _, graph_store = stores
-        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
-        ei = graph_store._get_edge_index(attr)
-        assert ei is not None
-        assert torch.equal(ei[0], torch.tensor([0, 1]))
-        assert torch.equal(ei[1], torch.tensor([1, 2]))
-
-    def test_indexed_feature_access(self, stores):
-        feature_store, _ = stores
-        idx = torch.tensor([0, 2])
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x", index=idx)
-        x = feature_store._get_tensor(attr)
-        assert x.shape == (2, 2)
+    def test_features_align_with_topology_indices(self, hetero_graph):
+        """Feature row i and edge index i must refer to the same node."""
+        feature_store, graph_store = _stores(hetero_graph)
+        x = feature_store.get_tensor("author", "x")
+        mapper = graph_store.id_mapper("author")
+        for pyg_idx in range(mapper.num_nodes):
+            falkor_id = mapper.pyg_to_falkor(pyg_idx)
+            expected = hetero_graph.nodes["author"][falkor_id]["x"]
+            assert x[pyg_idx].tolist() == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------------
-# Tests – NodeIDMapper integration
+# Tests – Cypher generation safety
 # ---------------------------------------------------------------------------
 
 
-class TestNodeIDMapperIntegration:
-    def test_non_contiguous_ids_remapped(self):
-        """FalkorDB IDs 100, 200, 300 should map to PyG indices 0, 1, 2."""
-        node_result = _make_result([[100], [200], [300]])
-        edge_result = _make_result([[100, 200], [200, 300], [100, 300]])
+class TestQuerySafety:
+    @pytest.mark.parametrize(
+        "hostile",
+        [
+            "paper`) DETACH DELETE n //",
+            "pa`per",
+            "with space",
+            "with\nnewline",
+            "}brace{",
+        ],
+    )
+    def test_identifiers_round_trip_instead_of_injecting(self, hostile):
+        """A quoted identifier must parse back to exactly the input string."""
+        from falkordb_pyg.utils import quote_identifier
 
-        graph = MagicMock()
+        quoted = quote_identifier(hostile)
+        assert quoted.startswith("`") and quoted.endswith("`")
+        # Undo the doubling the way Cypher's lexer would.
+        assert quoted[1:-1].replace("``", "`") == hostile
 
-        def _query(q):
-            if "RETURN ID(n)" in q:
-                return node_result
-            if "RETURN ID(s)" in q:
-                return edge_result
-            raise ValueError(q)
+    def test_hostile_label_does_not_add_a_second_statement(self):
+        from falkordb_pyg.utils import build_node_ids_query
 
-        graph.query.side_effect = _query
+        query = build_node_ids_query("paper`) DETACH DELETE n //")
+        assert query.count("MATCH") == 1
+        assert query.endswith("RETURN ID(n) ORDER BY ID(n)")
 
-        _, graph_store = _build_stores(graph)
-        attr = EdgeAttr(edge_type=("node", "rel", "node"), layout=EdgeLayout.COO)
-        ei = graph_store._get_edge_index(attr)
-        assert torch.equal(ei[0], torch.tensor([0, 1, 0]))
-        assert torch.equal(ei[1], torch.tensor([1, 2, 2]))
+    def test_hostile_label_round_trips_through_the_fake(self):
+        hostile = "pa`per"
+        graph = FakeFalkorGraph(nodes={hostile: {0: {"x": [1.0]}}})
+        store = FalkorDBFeatureStore(graph)
+        assert store.get_tensor(hostile, "x").shape == (1, 1)
 
-    def test_unknown_ids_dropped(self):
-        """Edges referencing IDs not in the node list are silently dropped."""
-        node_result = _make_result([[1], [2]])
-        # Edge 3->4 references IDs not in the node set
-        edge_result = _make_result([[1, 2], [3, 4]])
 
-        graph = MagicMock()
+# ---------------------------------------------------------------------------
+# Tests – layout plumbing through the public API
+# ---------------------------------------------------------------------------
 
-        def _query(q):
-            if "RETURN ID(n)" in q:
-                return node_result
-            if "RETURN ID(s)" in q:
-                return edge_result
-            raise ValueError(q)
 
-        graph.query.side_effect = _query
+class TestLayoutPlumbing:
+    def test_csc_conversion_matches_manual_sort(self, homo_graph):
+        _, graph_store = _stores(homo_graph)
+        graph_store.get_edge_index(PAPER_CITES, layout="coo")
+        row, colptr, perm = graph_store.csc()
+        assert colptr[PAPER_CITES].tolist() == [0, 1, 2, 3]
+        assert row[PAPER_CITES].numel() == 3
+        assert perm[PAPER_CITES].numel() == 3
 
-        _, graph_store = _build_stores(graph)
-        attr = EdgeAttr(edge_type=("node", "rel", "node"), layout=EdgeLayout.COO)
-        ei = graph_store._get_edge_index(attr)
-        # Only the first edge (1->2) should survive
-        assert ei[0].shape[0] == 1
-        assert torch.equal(ei[0], torch.tensor([0]))
-        assert torch.equal(ei[1], torch.tensor([1]))
+    def test_put_then_get_roundtrip(self, homo_graph):
+        _, graph_store = _stores(homo_graph)
+        src, dst = torch.tensor([0, 1]), torch.tensor([1, 2])
+        graph_store.put_edge_index((src, dst), PAPER_CITES, layout="coo", size=(3, 3))
+        attr = EdgeAttr(PAPER_CITES, layout=EdgeLayout.COO)
+        got_src, got_dst = graph_store._get_edge_index(attr)
+        assert torch.equal(got_src, src) and torch.equal(got_dst, dst)

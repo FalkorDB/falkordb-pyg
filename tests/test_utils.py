@@ -59,7 +59,13 @@ class TestQueryBuilders:
 
     def test_edge_query(self):
         assert build_edge_query("author", "writes", "paper") == (
-            "MATCH (s:`author`)-[r:`writes`]->(d:`paper`) RETURN ID(s), ID(d)"
+            "MATCH (s:`author`)-[r:`writes`]->(d:`paper`) RETURN ID(s), ID(d), ID(r)"
+        )
+
+    def test_edge_query_projects_relationship_id(self):
+        """ID(r) keeps FalkorDB from collapsing parallel edges into one row."""
+        assert build_edge_query("paper", "cites", "paper").endswith(
+            "RETURN ID(s), ID(d), ID(r)"
         )
 
     @pytest.mark.parametrize("hostile", HOSTILE)
@@ -79,7 +85,7 @@ class TestQueryBuilders:
     def test_hostile_relationship_cannot_add_a_clause(self, hostile):
         query = build_edge_query("paper", hostile, "paper")
         assert query.count("MATCH") == 1
-        assert query.endswith(" RETURN ID(s), ID(d)")
+        assert query.endswith(" RETURN ID(s), ID(d), ID(r)")
 
 
 class TestNodeIDMapper:

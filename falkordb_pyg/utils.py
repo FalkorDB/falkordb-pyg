@@ -110,10 +110,15 @@ def build_feature_query(label: str, prop: str) -> str:
 
 
 def build_edge_query(src_label: str, rel_type: str, dst_label: str) -> str:
-    """Return a Cypher query that fetches (src_id, dst_id) for an edge type."""
+    """Return a Cypher query that fetches (src_id, dst_id, rel_id) for an edge type.
+
+    ``ID(r)`` is projected even though callers only need the endpoints: without
+    it FalkorDB collapses identical ``(ID(s), ID(d))`` rows, silently dropping
+    parallel edges between the same pair of nodes.
+    """
     return (
         f"MATCH (s:{quote_identifier(src_label)})"
         f"-[r:{quote_identifier(rel_type)}]->"
         f"(d:{quote_identifier(dst_label)}) "
-        f"RETURN ID(s), ID(d)"
+        f"RETURN ID(s), ID(d), ID(r)"
     )
