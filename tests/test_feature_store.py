@@ -1,259 +1,324 @@
-"""Unit tests for FalkorDBFeatureStore."""
+"""Unit tests for FalkorDBFeatureStore.
 
-from unittest.mock import MagicMock
+These drive the PUBLIC PyG FeatureStore API wherever possible — the private
+``_``-prefixed methods are ABC hooks, and testing only those is what allowed
+the public surface to ship broken.
+"""
 
 import pytest
 import torch
 
 from falkordb_pyg.feature_store import FalkorDBFeatureStore, FalkorDBTensorAttr
 
-
-def _make_result(rows):
-    result = MagicMock()
-    result.result_set = rows
-    return result
-
-
-def _make_graph(query_map):
-    graph = MagicMock()
-
-    def _query(q):
-        for key, result in query_map.items():
-            if key in q:
-                return result
-        raise ValueError(f"Unexpected query: {q}")
-
-    graph.query.side_effect = _query
-    return graph
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+from .conftest import FakeFalkorGraph
 
 
 @pytest.fixture()
-def paper_graph():
-    """Mock graph with 'paper' nodes, each having a scalar 'y' label and a
-    2-D 'x' feature vector."""
-    # Rows: [property_value, node_id]
-    x_result = _make_result(
-        [
-            [[1.0, 2.0], 10],
-            [[3.0, 4.0], 11],
-            [[5.0, 6.0], 12],
-        ]
-    )
-    y_result = _make_result(
-        [
-            [0, 10],
-            [1, 11],
-            [2, 12],
-        ]
-    )
-
-    graph = MagicMock()
-
-    def _query(q):
-        if "n.`x`" in q:
-            return x_result
-        if "n.`y`" in q:
-            return y_result
-        raise ValueError(f"Unexpected query: {q}")
-
-    graph.query.side_effect = _query
-    return graph
+def store(homo_graph):
+    return FalkorDBFeatureStore(homo_graph)
 
 
 # ---------------------------------------------------------------------------
-# Tests – put / get / remove tensor
+# Tests – public PyG API
 # ---------------------------------------------------------------------------
 
 
-class TestPutGetRemoveTensor:
-    def test_put_and_get_full_tensor(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        tensor = torch.arange(9, dtype=torch.float).reshape(3, 3)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
+class TestPublicAPI:
+    """The API a PyG user actually calls. Every one of these failed in 0.2.1."""
 
-        assert store._put_tensor(tensor, attr) is True
-        result = store._get_tensor(attr)
-        assert result is not None
-        assert torch.equal(result, tensor)
+    def test_tensor_attr_cls_is_registered(self, store):
+        assert store._tensor_attr_cls is FalkorDBTensorAttr
 
-    def test_get_fetches_from_db_when_not_cached(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
+    def test_get_tensor(self, store):
+        assert store.get_tensor("paper", "x").shape == (3, 2)
 
-        result = store._get_tensor(attr)
-        assert result is not None
-        assert result.shape == (3, 2)
-        assert torch.allclose(result[0], torch.tensor([1.0, 2.0]))
+    def test_getitem(self, store):
+        assert store["paper", "x"].shape == (3, 2)
 
-    def test_get_scalar_property_as_column_tensor(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="y")
+    def test_getitem_with_index(self, store):
+        out = store["paper", "x", torch.tensor([0, 2])]
+        assert out.shape == (2, 2)
+        assert torch.allclose(out[1], torch.tensor([5.0, 6.0]))
 
-        result = store._get_tensor(attr)
-        assert result is not None
-        assert result.shape == (3, 1)
+    def test_get_tensor_size(self, store):
+        assert store.get_tensor_size("paper", "x") == (3, 2)
 
-    def test_get_with_index(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
+    def test_put_tensor(self, store):
+        tensor = torch.ones(3, 4)
+        assert store.put_tensor(tensor, "paper", "z") is True
+        assert torch.equal(store.get_tensor("paper", "z"), tensor)
+
+    def test_setitem(self, store):
+        store["paper", "z"] = torch.ones(3, 4)
+        assert torch.equal(store["paper", "z"], torch.ones(3, 4))
+
+    def test_view(self, store):
+        assert store.view("paper").x.shape == (3, 2)
+
+    def test_multi_get_tensor(self, store):
+        x, y = store.multi_get_tensor(
+            [
+                FalkorDBTensorAttr("paper", "x"),
+                FalkorDBTensorAttr("paper", "y"),
+            ]
+        )
+        assert x.shape == (3, 2)
+        assert y.shape == (3, 1)
+
+    def test_remove_tensor(self, store):
+        store.put_tensor(torch.zeros(3, 2), "paper", "z")
+        assert store.remove_tensor("paper", "z") is True
+
+
+# ---------------------------------------------------------------------------
+# Tests – fetching and indexing
+# ---------------------------------------------------------------------------
+
+
+class TestFetch:
+    def test_vector_feature(self, store):
+        out = store.get_tensor("paper", "x")
+        assert torch.allclose(out[0], torch.tensor([1.0, 2.0]))
+        assert out.dtype == torch.float
+
+    def test_scalar_feature_is_column(self, store):
+        assert store.get_tensor("paper", "y").shape == (3, 1)
+
+    def test_index_selects_rows(self, store):
+        full = store.get_tensor("paper", "x")
         idx = torch.tensor([0, 2])
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x", index=idx)
+        assert torch.equal(store.get_tensor("paper", "x", index=idx), full[idx])
 
-        result = store._get_tensor(attr)
-        assert result is not None
-        assert result.shape == (2, 2)
-        assert torch.allclose(result[0], torch.tensor([1.0, 2.0]))
-        assert torch.allclose(result[1], torch.tensor([5.0, 6.0]))
+    def test_rows_are_ordered_by_falkordb_id(self, homo_graph):
+        """Row i must correspond to the i-th node in ID order.
 
-    def test_get_with_none_index_returns_full_tensor(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x", index=None)
+        This is the invariant that keeps features aligned with the topology
+        the GraphStore builds; nothing else in the codebase enforces it.
+        """
+        store = FalkorDBFeatureStore(homo_graph)
+        y = store.get_tensor("paper", "y").squeeze(1)
+        ordered_ids = sorted(homo_graph.nodes["paper"])
+        expected = [homo_graph.nodes["paper"][nid]["y"] for nid in ordered_ids]
+        assert y.tolist() == expected
 
-        result = store._get_tensor(attr)
-        assert result is not None
-        assert result.shape == (3, 2)
+    def test_empty_label_returns_rank_two_tensor(self):
+        store = FalkorDBFeatureStore(FakeFalkorGraph(nodes={"ghost": {}}))
+        with pytest.warns(UserWarning, match="No nodes matched"):
+            out = store.get_tensor("ghost", "x")
+        assert out.shape == (0, 0)
 
-    def test_remove_tensor(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
 
-        store._put_tensor(torch.zeros(3, 2), attr)
-        assert store._remove_tensor(attr) is True
-        assert store._remove_tensor(attr) is False
+# ---------------------------------------------------------------------------
+# Tests – dtype inference
+# ---------------------------------------------------------------------------
 
-    def test_remove_nonexistent_returns_false(self):
-        graph = MagicMock()
+
+class TestDtype:
+    def test_integer_scalars_stay_integers(self, store):
+        """Labels must not be silently floated: cross_entropy needs int64."""
+        assert store.get_tensor("paper", "y").dtype == torch.long
+
+    def test_float_scalars_are_float(self):
+        graph = FakeFalkorGraph(nodes={"paper": {0: {"t": 1.5}, 1: {"t": 2.5}}})
+        assert FalkorDBFeatureStore(graph).get_tensor("paper", "t").dtype == torch.float
+
+    def test_bool_scalars_are_bool(self):
+        graph = FakeFalkorGraph(nodes={"paper": {0: {"m": True}, 1: {"m": False}}})
+        assert FalkorDBFeatureStore(graph).get_tensor("paper", "m").dtype == torch.bool
+
+    def test_integer_vectors_are_float(self):
+        """Vectors are model inputs; conv layers want float."""
+        graph = FakeFalkorGraph(nodes={"paper": {0: {"x": [1, 2]}, 1: {"x": [3, 4]}}})
+        assert FalkorDBFeatureStore(graph).get_tensor("paper", "x").dtype == torch.float
+
+    def test_explicit_override(self, homo_graph):
+        store = FalkorDBFeatureStore(homo_graph, dtypes={("paper", "y"): torch.float})
+        assert store.get_tensor("paper", "y").dtype == torch.float
+
+    def test_override_is_keyed_by_pyg_group_name_not_falkordb_label(self):
+        """dtypes must key off the name the caller uses, not the mapped label."""
+        graph = FakeFalkorGraph(nodes={"Paper": {0: {"y": 1}, 1: {"y": 2}}})
+        store = FalkorDBFeatureStore(
+            graph,
+            node_type_to_label={"paper": "Paper"},
+            dtypes={("paper", "y"): torch.float},
+        )
+        assert store.get_tensor("paper", "y").dtype == torch.float
+
+    def test_vector_override_is_keyed_by_group_name_too(self):
+        graph = FakeFalkorGraph(nodes={"Paper": {0: {"x": [1.0, 2.0]}}})
+        store = FalkorDBFeatureStore(
+            graph,
+            node_type_to_label={"paper": "Paper"},
+            dtypes={("paper", "x"): torch.float64},
+        )
+        assert store.get_tensor("paper", "x").dtype == torch.float64
+
+
+# ---------------------------------------------------------------------------
+# Tests – malformed data produces actionable errors
+# ---------------------------------------------------------------------------
+
+
+class TestDataHazards:
+    def test_missing_property_names_the_node(self):
+        graph = FakeFalkorGraph(
+            nodes={"paper": {7: {"x": [1.0, 2.0]}, 9: {}, 11: {"x": [5.0, 6.0]}}}
+        )
         store = FalkorDBFeatureStore(graph)
-        attr = FalkorDBTensorAttr(group_name="nonexistent", attr_name="feat")
-        assert store._remove_tensor(attr) is False
+        with pytest.raises(ValueError, match=r"ID\(n\)=9"):
+            store.get_tensor("paper", "x")
 
-    def test_get_empty_graph(self):
-        graph = MagicMock()
-        graph.query.return_value = _make_result([])
+    def test_ragged_vectors_name_the_node_and_lengths(self):
+        graph = FakeFalkorGraph(
+            nodes={"paper": {0: {"x": [1.0, 2.0]}, 3: {"x": [3.0]}}}
+        )
         store = FalkorDBFeatureStore(graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        result = store._get_tensor(attr)
-        assert result is not None
-        assert result.shape[0] == 0
+        with pytest.raises(ValueError, match=r"inconsistent length.*ID\(n\)=3"):
+            store.get_tensor("paper", "x")
 
-
-# ---------------------------------------------------------------------------
-# Tests – get_tensor_size
-# ---------------------------------------------------------------------------
-
-
-class TestGetTensorSize:
-    def test_returns_correct_shape(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        size = store._get_tensor_size(attr)
-        assert size == (3, 2)
-
-    def test_put_then_get_size(self):
-        graph = MagicMock()
+    def test_string_property_is_rejected(self):
+        graph = FakeFalkorGraph(nodes={"paper": {0: {"t": "hello"}, 1: {"t": "world"}}})
         store = FalkorDBFeatureStore(graph)
-        tensor = torch.zeros(5, 16)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        store._put_tensor(tensor, attr)
-        assert store._get_tensor_size(attr) == (5, 16)
+        with pytest.raises(ValueError, match="non-numeric type str"):
+            store.get_tensor("paper", "t")
 
-
-# ---------------------------------------------------------------------------
-# Tests – get_all_tensor_attrs
-# ---------------------------------------------------------------------------
-
-
-class TestGetAllTensorAttrs:
-    def test_empty_initially(self):
-        graph = MagicMock()
+    def test_mixed_vector_then_scalar_is_rejected(self):
+        graph = FakeFalkorGraph(nodes={"paper": {0: {"x": [1.0]}, 1: {"x": 2.0}}})
         store = FalkorDBFeatureStore(graph)
-        assert store.get_all_tensor_attrs() == []
+        with pytest.raises(ValueError, match="scalar on"):
+            store.get_tensor("paper", "x")
 
-    def test_returns_registered_attrs(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr_x = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        attr_y = FalkorDBTensorAttr(group_name="paper", attr_name="y")
-        store._put_tensor(torch.zeros(3, 2), attr_x)
-        store._put_tensor(torch.zeros(3, 1), attr_y)
+    def test_mixed_scalar_then_vector_is_rejected(self):
+        """The reverse order takes the scalar branch and must fail too."""
+        graph = FakeFalkorGraph(nodes={"paper": {0: {"x": 1.0}, 1: {"x": [2.0]}}})
+        store = FalkorDBFeatureStore(graph)
+        with pytest.raises(ValueError, match=r"vector at ID\(n\)=1"):
+            store.get_tensor("paper", "x")
 
-        attrs = store.get_all_tensor_attrs()
-        names = {a.attr_name for a in attrs}
-        assert names == {"x", "y"}
+    def test_non_numeric_element_inside_a_vector_is_rejected(self):
+        graph = FakeFalkorGraph(
+            nodes={"paper": {0: {"x": [1.0, "two"]}, 3: {"x": [3.0, 4.0]}}}
+        )
+        store = FalkorDBFeatureStore(graph)
+        with pytest.raises(ValueError, match=r"non-numeric element at ID\(n\)=0"):
+            store.get_tensor("paper", "x")
 
-    def test_auto_registers_on_get(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        store._get_tensor(attr)
-        assert len(store.get_all_tensor_attrs()) == 1
+    def test_nested_vectors_are_rejected(self):
+        graph = FakeFalkorGraph(
+            nodes={"paper": {0: {"x": [[1.0], [2.0]]}, 1: {"x": [[3.0], [4.0]]}}}
+        )
+        store = FalkorDBFeatureStore(graph)
+        with pytest.raises(ValueError, match="nested more than one level"):
+            store.get_tensor("paper", "x")
 
-
-# ---------------------------------------------------------------------------
-# Tests – FalkorDBTensorAttr defaults
-# ---------------------------------------------------------------------------
-
-
-class TestFalkorDBTensorAttr:
-    def test_index_defaults_to_none(self):
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        assert attr.index is None
-
-    def test_group_name_and_attr_name_set(self):
-        attr = FalkorDBTensorAttr(group_name="author", attr_name="feat")
-        assert attr.group_name == "author"
-        assert attr.attr_name == "feat"
+    def test_edge_features_are_rejected_not_silently_wrong(self, store):
+        """0.2.1 answered this with source-node features and no error."""
+        with pytest.raises(NotImplementedError, match="does not support edge features"):
+            store.get_tensor(("paper", "cites", "paper"), "x")
 
 
 # ---------------------------------------------------------------------------
-# Tests – caching behaviour
+# Tests – caching
 # ---------------------------------------------------------------------------
 
 
 class TestCaching:
-    def test_db_not_queried_on_second_get(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
+    def test_db_not_queried_on_second_get(self, store, homo_graph):
+        store.get_tensor("paper", "x")
+        count = len(homo_graph.calls)
+        store.get_tensor("paper", "x")
+        assert len(homo_graph.calls) == count
 
-        store._get_tensor(attr)
-        count_after_first = paper_graph.query.call_count
+    def test_mutating_a_returned_tensor_does_not_poison_the_cache(self, store):
+        first = store.get_tensor("paper", "x")
+        first[0, 0] = 999.0
+        assert store.get_tensor("paper", "x")[0, 0].item() == 1.0
 
-        store._get_tensor(attr)
-        assert paper_graph.query.call_count == count_after_first
+    def test_mutating_a_put_tensor_does_not_poison_the_cache(self, store):
+        tensor = torch.ones(3, 2)
+        store.put_tensor(tensor, "paper", "z")
+        tensor[0, 0] = 999.0
+        assert store.get_tensor("paper", "z")[0, 0].item() == 1.0
 
-    def test_put_overwrites_cached_db_value(self, paper_graph):
-        store = FalkorDBFeatureStore(paper_graph)
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        store._get_tensor(attr)  # populate from DB
+    def test_clear_cache_forces_refetch(self, store, homo_graph):
+        store.get_tensor("paper", "x")
+        count = len(homo_graph.calls)
+        store.clear_cache()
+        store.get_tensor("paper", "x")
+        assert len(homo_graph.calls) > count
 
-        new_tensor = torch.ones(3, 4)
-        store._put_tensor(new_tensor, attr)
-        result = store._get_tensor(attr)
-        assert torch.equal(result, new_tensor)
+    def test_clear_cache_by_group_name(self, store, homo_graph):
+        store.get_tensor("paper", "x")
+        calls = len(homo_graph.calls)
+        store.clear_cache(group_name="other")  # no such group: nothing evicted
+        store.get_tensor("paper", "x")
+        assert len(homo_graph.calls) == calls
+        store.clear_cache(group_name="paper")
+        store.get_tensor("paper", "x")
+        assert len(homo_graph.calls) > calls
+
+    def test_clear_cache_is_selective(self, store, homo_graph):
+        store.get_tensor("paper", "x")
+        store.get_tensor("paper", "y")
+        store.clear_cache(attr_name="x")
+        count = len(homo_graph.calls)
+        store.get_tensor("paper", "y")
+        assert len(homo_graph.calls) == count  # 'y' still cached
+
+    def test_put_overwrites_cached_db_value(self, store):
+        store.get_tensor("paper", "x")
+        store.put_tensor(torch.ones(3, 4), "paper", "x")
+        assert torch.equal(store.get_tensor("paper", "x"), torch.ones(3, 4))
 
 
 # ---------------------------------------------------------------------------
-# Tests – node type label mapping
+# Tests – attribute registry
+# ---------------------------------------------------------------------------
+
+
+class TestTensorAttrs:
+    def test_empty_initially(self, store):
+        assert store.get_all_tensor_attrs() == []
+
+    def test_auto_registers_on_get(self, store):
+        store.get_tensor("paper", "x")
+        assert {a.attr_name for a in store.get_all_tensor_attrs()} == {"x"}
+
+    def test_registry_is_not_leaked_to_callers(self, store):
+        """PyG assembles batches by writing .index onto attrs it is handed."""
+        store.get_tensor("paper", "x")
+        assert store.get_tensor_size("paper", "x") == (3, 2)
+        leaked = store.get_all_tensor_attrs()[0]
+        leaked.index = torch.tensor([0])
+        assert store.get_all_tensor_attrs()[0].index is None
+        assert store.get_tensor_size("paper", "x") == (3, 2)
+
+    def test_get_tensor_size_does_not_clone_the_matrix(self, store, monkeypatch):
+        """Reading a shape must not copy a potentially huge feature matrix."""
+        store.get_tensor_size("paper", "x")
+        cached = store._tensor_cache[("paper", "x")]
+        monkeypatch.setattr(
+            type(cached), "clone", lambda self: pytest.fail("cloned to read a shape")
+        )
+        assert store.get_tensor_size("paper", "x") == (3, 2)
+
+    def test_get_tensor_size_ignores_index(self, store):
+        attr = FalkorDBTensorAttr("paper", "x", index=torch.tensor([0]))
+        assert store._get_tensor_size(attr) == (3, 2)
+
+    def test_index_defaults_to_none(self):
+        assert FalkorDBTensorAttr(group_name="paper", attr_name="x").index is None
+
+
+# ---------------------------------------------------------------------------
+# Tests – label mapping
 # ---------------------------------------------------------------------------
 
 
 class TestNodeTypeLabelMapping:
     def test_custom_label_used_in_query(self):
-        x_result = _make_result([[[1.0, 2.0], 0]])
-        graph = MagicMock()
-
-        def _query(q):
-            if "n.`x`" in q:
-                return x_result
-            raise ValueError(q)
-
-        graph.query.side_effect = _query
-
+        graph = FakeFalkorGraph(nodes={"Paper": {0: {"x": [1.0, 2.0]}}})
         store = FalkorDBFeatureStore(graph, node_type_to_label={"paper": "Paper"})
-        attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
-        store._get_tensor(attr)
-
-        calls = [c.args[0] for c in graph.query.call_args_list]
-        assert any("Paper" in c for c in calls)
+        assert store.get_tensor("paper", "x").shape == (1, 2)
+        assert any("`Paper`" in call for call in graph.calls)
