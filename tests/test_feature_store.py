@@ -322,3 +322,38 @@ class TestNodeTypeLabelMapping:
         store = FalkorDBFeatureStore(graph, node_type_to_label={"paper": "Paper"})
         assert store.get_tensor("paper", "x").shape == (1, 2)
         assert any("`Paper`" in call for call in graph.calls)
+
+
+# ---------------------------------------------------------------------------
+# Tests – read_only
+# ---------------------------------------------------------------------------
+
+
+class TestReadOnly:
+    def test_reads_use_ro_query_by_default(self, homo_graph, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            homo_graph,
+            "ro_query",
+            lambda q, params=None, **kw: seen.append(q) or homo_graph.query(q),
+        )
+        FalkorDBFeatureStore(homo_graph).get_tensor("paper", "x")
+        assert seen
+
+    def test_read_only_false_uses_query(self, homo_graph, monkeypatch):
+        monkeypatch.setattr(
+            homo_graph,
+            "ro_query",
+            lambda *a, **k: pytest.fail("ro_query used with read_only=False"),
+        )
+        store = FalkorDBFeatureStore(homo_graph, read_only=False)
+        assert store.get_tensor("paper", "x").shape == (3, 2)
+
+    def test_handle_without_ro_query_falls_back_with_a_warning(self, legacy_graph):
+        """An older client must degrade, not AttributeError mid-epoch."""
+        store = FalkorDBFeatureStore(legacy_graph)
+        with pytest.warns(UserWarning, match="no ro_query"):
+            assert store.get_tensor("paper", "x").shape == (3, 2)
+        # Warned once, then stops trying.
+        assert store._read_only is False
+        assert store.get_tensor("paper", "y").shape == (3, 1)

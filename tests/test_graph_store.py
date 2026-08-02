@@ -246,3 +246,38 @@ class TestTypeMapping:
         )
         row, _ = store.get_edge_index(PAPER_CITES, layout="coo")
         assert row.tolist() == [0]
+
+
+# ---------------------------------------------------------------------------
+# Tests – read_only
+# ---------------------------------------------------------------------------
+
+
+class TestReadOnly:
+    def test_reads_use_ro_query_by_default(self, homo_graph, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            homo_graph,
+            "ro_query",
+            lambda q, params=None, **kw: seen.append(q) or homo_graph.query(q),
+        )
+        FalkorDBGraphStore(homo_graph).get_edge_index(PAPER_CITES, layout="coo")
+        assert seen
+
+    def test_read_only_false_uses_query(self, homo_graph, monkeypatch):
+        monkeypatch.setattr(
+            homo_graph,
+            "ro_query",
+            lambda *a, **k: pytest.fail("ro_query used with read_only=False"),
+        )
+        store = FalkorDBGraphStore(homo_graph, read_only=False)
+        assert store.get_edge_index(PAPER_CITES, layout="coo") is not None
+
+    def test_handle_without_ro_query_falls_back_with_a_warning(self, legacy_graph):
+        """An older client must degrade, not AttributeError mid-epoch."""
+        store = FalkorDBGraphStore(legacy_graph)
+        with pytest.warns(UserWarning, match="no ro_query"):
+            assert store.get_edge_index(PAPER_CITES, layout="coo") is not None
+        # Warned once, then stops trying.
+        assert store._read_only is False
+        assert store.id_mapper("paper").num_nodes == 3

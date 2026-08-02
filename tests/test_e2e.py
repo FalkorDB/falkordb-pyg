@@ -178,8 +178,8 @@ class TestFeatureStoreE2E:
         attr = FalkorDBTensorAttr(group_name="paper", attr_name="x")
 
         calls = []
-        original = graph.query
-        graph.query = lambda q, *a, **kw: (calls.append(q), original(q, *a, **kw))[1]
+        original = graph.ro_query
+        graph.ro_query = lambda q, *a, **kw: (calls.append(q), original(q, *a, **kw))[1]
 
         first = store.get_tensor(attr)
         assert len(calls) == 1

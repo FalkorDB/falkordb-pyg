@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 from falkordb import FalkorDB
 
@@ -32,6 +32,9 @@ except ImportError as exc:  # pragma: no cover - depends on the install extras
 
 from .utils import NodeIDMapper
 
+if TYPE_CHECKING:
+    import torch
+
 try:
     __version__ = _version("falkordb-pyg")
 except PackageNotFoundError:  # pragma: no cover - running from a source tree
@@ -53,12 +56,22 @@ def get_remote_backend(
     graph_name: str = "default",
     node_type_to_label: Optional[Dict[str, str]] = None,
     edge_type_to_rel: Optional[Dict[Tuple[str, str, str], str]] = None,
+    dtypes: Optional[Dict[Tuple[str, str], "torch.dtype"]] = None,
+    read_only: bool = True,
+    graph=None,
 ) -> Tuple[FalkorDBFeatureStore, FalkorDBGraphStore]:
     """Create a FalkorDB-backed PyG Remote Backend.
 
     Connects to a running FalkorDB instance and returns a
-    ``(FeatureStore, GraphStore)`` tuple that can be passed directly to
+    ``(FeatureStore, GraphStore)`` tuple that can be passed to
     :class:`~torch_geometric.loader.NeighborLoader` and other PyG loaders.
+
+    .. note::
+
+        Both stores currently register a node type / edge type only once it
+        has been accessed.  Until schema auto-discovery lands, prime the types
+        you intend to sample before constructing a loader — see the README's
+        Quick Start.
 
     Args:
         host: Hostname of the FalkorDB / Redis server.
@@ -70,6 +83,14 @@ def get_remote_backend(
         edge_type_to_rel: Optional mapping from PyG edge type triples
             ``(src_type, rel_type, dst_type)`` to FalkorDB relationship type
             strings.  Defaults to using the middle element of the triple.
+        dtypes: Optional mapping from ``(node_type, property)`` to an explicit
+            :class:`torch.dtype`, overriding inference.  Keyed by the PyG node
+            type, not by the FalkorDB label it maps to.
+        read_only: Issue reads with ``GRAPH.RO_QUERY`` so they can be served
+            by a replica.  Set to ``False`` for servers without RO_QUERY.
+        graph: An existing ``falkordb.Graph`` handle to use instead of opening
+            a new connection.  When given, ``host``/``port``/``graph_name`` are
+            ignored.
 
     Returns:
         A ``(FalkorDBFeatureStore, FalkorDBGraphStore)`` tuple.
@@ -85,6 +106,10 @@ def get_remote_backend(
             graph_name="papers",
         )
 
+        # Prime the types the loader will sample:
+        feature_store.get_tensor_size("paper", "x")
+        graph_store.get_edge_index(("paper", "cites", "paper"), layout="coo")
+
         loader = NeighborLoader(
             data=(feature_store, graph_store),
             num_neighbors={("paper", "cites", "paper"): [10, 10]},
@@ -92,16 +117,20 @@ def get_remote_backend(
             input_nodes=("paper", train_nodes),
         )
     """
-    db = FalkorDB(host=host, port=port)
-    graph = db.select_graph(graph_name)
+    if graph is None:
+        db = FalkorDB(host=host, port=port)
+        graph = db.select_graph(graph_name)
 
     feature_store = FalkorDBFeatureStore(
         graph=graph,
         node_type_to_label=node_type_to_label,
+        dtypes=dtypes,
+        read_only=read_only,
     )
     graph_store = FalkorDBGraphStore(
         graph=graph,
         node_type_to_label=node_type_to_label,
         edge_type_to_rel=edge_type_to_rel,
+        read_only=read_only,
     )
     return feature_store, graph_store

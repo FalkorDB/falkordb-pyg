@@ -54,6 +54,18 @@ class TestGetRemoteBackend:
         assert graph_store._edge_type_to_rel == {PAPER_CITES: "CITES"}
         assert feature_store._node_type_to_label == {"paper": "Paper"}
 
+    def test_accepts_an_existing_graph_handle(self, homo_graph):
+        """Bring-your-own connection: needed for auth'd / pooled clients."""
+        with patch("falkordb_pyg.FalkorDB") as mock_falkordb:
+            feature_store, graph_store = get_remote_backend(graph=homo_graph)
+        mock_falkordb.assert_not_called()
+        assert feature_store.get_tensor("paper", "x").shape == (3, 2)
+        assert graph_store.get_edge_index(PAPER_CITES, layout="coo") is not None
+
+    def test_both_stores_share_one_connection(self, homo_graph):
+        feature_store, graph_store = get_remote_backend(graph=homo_graph)
+        assert feature_store._graph is graph_store._graph
+
     def test_version_is_exported(self):
         import falkordb_pyg
 
