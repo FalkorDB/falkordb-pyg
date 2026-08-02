@@ -1,274 +1,248 @@
 """Unit tests for FalkorDBGraphStore."""
 
-from unittest.mock import MagicMock
-
 import pytest
 import torch
 from torch_geometric.data.graph_store import EdgeAttr, EdgeLayout
 
 from falkordb_pyg.graph_store import FalkorDBGraphStore
 
+from .conftest import FakeFalkorGraph
 
-def _make_result(rows):
-    """Create a mock FalkorDB query result."""
-    result = MagicMock()
-    result.result_set = rows
-    return result
-
-
-def _make_graph(query_map):
-    """Create a mock FalkorDB graph whose .query() returns results from *query_map*."""
-    graph = MagicMock()
-
-    def _query(q):
-        for prefix, result in query_map.items():
-            if q.startswith(prefix) or prefix in q:
-                return result
-        raise ValueError(f"Unexpected query: {q}")
-
-    graph.query.side_effect = _query
-    return graph
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+PAPER_CITES = ("paper", "cites", "paper")
+AUTHOR_WRITES = ("author", "writes", "paper")
 
 
 @pytest.fixture()
-def homo_graph():
-    """A mock FalkorDB graph with one node type 'paper' and one edge type."""
-    # Node IDs for 'paper' nodes (FalkorDB internal IDs 10, 11, 12)
-    node_result = _make_result([[10], [11], [12]])
-    # Edges: 10->11, 11->12
-    edge_result = _make_result([[10, 11], [11, 12]])
-
-    graph = MagicMock()
-
-    def _query(q):
-        if "RETURN ID(n)" in q:
-            return node_result
-        if "RETURN ID(s)" in q:
-            return edge_result
-        raise ValueError(f"Unexpected query: {q}")
-
-    graph.query.side_effect = _query
-    return graph
+def store(homo_graph):
+    return FalkorDBGraphStore(homo_graph)
 
 
-@pytest.fixture()
-def hetero_graph():
-    """A mock FalkorDB graph with two node types and two edge types."""
-    paper_ids = _make_result([[0], [1], [2]])
-    author_ids = _make_result([[10], [11]])
-    writes_edges = _make_result([[10, 0], [10, 1], [11, 2]])
-    cites_edges = _make_result([[0, 1], [1, 2]])
-
-    graph = MagicMock()
-
-    def _query(q):
-        if "`paper`" in q and "RETURN ID(n)" in q:
-            return paper_ids
-        if "`author`" in q and "RETURN ID(n)" in q:
-            return author_ids
-        if "`writes`" in q:
-            return writes_edges
-        if "`cites`" in q:
-            return cites_edges
-        raise ValueError(f"Unexpected query: {q}")
-
-    graph.query.side_effect = _query
-    return graph
+def coo(edge_type, **kwargs):
+    return EdgeAttr(edge_type=edge_type, layout=EdgeLayout.COO, **kwargs)
 
 
 # ---------------------------------------------------------------------------
-# Tests – put / get / remove edge index
+# Tests – public PyG API
 # ---------------------------------------------------------------------------
 
 
-class TestPutGetRemoveEdgeIndex:
-    def test_put_and_get_coo(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        edge_type = ("paper", "cites", "paper")
-        src = torch.tensor([0, 1])
-        dst = torch.tensor([1, 2])
-        attr = EdgeAttr(edge_type=edge_type, layout=EdgeLayout.COO, size=(3, 3))
+class TestPublicAPI:
+    def test_get_edge_index(self, store):
+        row, col = store.get_edge_index(PAPER_CITES, layout="coo")
+        assert row.tolist() == [0, 1, 1]
+        assert col.tolist() == [1, 2, 0]
 
-        assert store._put_edge_index((src, dst), attr) is True
-        result = store._get_edge_index(attr)
-        assert result is not None
-        assert torch.equal(result[0], src)
-        assert torch.equal(result[1], dst)
+    def test_put_edge_index(self, store):
+        src, dst = torch.tensor([0, 1]), torch.tensor([1, 2])
+        store.put_edge_index((src, dst), PAPER_CITES, layout="coo", size=(3, 3))
+        row, col = store.get_edge_index(PAPER_CITES, layout="coo")
+        assert torch.equal(row, src) and torch.equal(col, dst)
 
-    def test_get_fetches_from_db_when_not_cached(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        edge_type = ("paper", "cites", "paper")
-        attr = EdgeAttr(edge_type=edge_type, layout=EdgeLayout.COO)
+    def test_remove_edge_index(self, store):
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        assert store.remove_edge_index(PAPER_CITES, layout="coo") is True
 
-        result = store._get_edge_index(attr)
-        assert result is not None
-        # FalkorDB IDs 10->11, 11->12 should remap to PyG indices 0->1, 1->2
-        assert torch.equal(result[0], torch.tensor([0, 1]))
-        assert torch.equal(result[1], torch.tensor([1, 2]))
+    def test_coo_csr_csc(self, store):
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        assert store.coo() is not None
+        assert store.csr() is not None
+        assert store.csc() is not None
 
-    def test_get_returns_none_for_empty_graph(self):
-        graph = MagicMock()
-        graph.query.return_value = _make_result([])
+    def test_csc_store_true_does_not_raise(self, store):
+        """PyG memoises conversions via put_edge_index; 0.2.1 raised here."""
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        store.csc(store=True)
+        store.csr(store=True)
+
+
+# ---------------------------------------------------------------------------
+# Tests – ID remapping
+# ---------------------------------------------------------------------------
+
+
+class TestNodeIDRemapping:
+    def test_non_contiguous_ids_are_remapped(self, store):
+        """FalkorDB IDs 10, 11, 12 become PyG indices 0, 1, 2."""
+        row, col = store.get_edge_index(PAPER_CITES, layout="coo")
+        assert row.max() < 3 and col.max() < 3
+        assert store.id_mapper("paper").num_nodes == 3
+        assert store.id_mapper("paper").pyg_to_falkor(1) == 11
+        assert store.id_mapper("paper").falkor_to_pyg(12) == 2
+
+    def test_edges_to_unknown_nodes_are_dropped_with_a_warning(self):
+        graph = FakeFalkorGraph(
+            nodes={"paper": {1: {}, 2: {}}},
+            # 3->4 references nodes outside the :paper id map
+            edges={PAPER_CITES: [(1, 2), (3, 4)]},
+        )
         store = FalkorDBGraphStore(graph)
-        attr = EdgeAttr(edge_type=("A", "rel", "B"), layout=EdgeLayout.COO)
-        result = store._get_edge_index(attr)
-        assert result is not None
-        assert result[0].shape[0] == 0
-        assert result[1].shape[0] == 0
+        with pytest.warns(UserWarning, match="1 of 2"):
+            row, col = store.get_edge_index(PAPER_CITES, layout="coo")
+        assert row.tolist() == [0] and col.tolist() == [1]
+        assert store.dropped_edges[PAPER_CITES] == 1
 
-    def test_remove_edge_index(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        edge_type = ("paper", "cites", "paper")
-        src = torch.tensor([0, 1])
-        dst = torch.tensor([1, 2])
-        attr = EdgeAttr(edge_type=edge_type, layout=EdgeLayout.COO, size=(3, 3))
+    def test_parallel_edges_are_preserved(self):
+        """Two relationships between the same pair must yield two COO entries.
 
-        store._put_edge_index((src, dst), attr)
-        assert store._remove_edge_index(attr) is True
-        # Removing again should return False
-        assert store._remove_edge_index(attr) is False
+        The edge query projects ID(r) precisely to stop FalkorDB collapsing
+        identical (ID(s), ID(d)) rows.
+        """
+        graph = FakeFalkorGraph(
+            nodes={"paper": {0: {}, 1: {}}},
+            edges={PAPER_CITES: [(0, 1), (0, 1), (1, 0)]},
+        )
+        row, col = FalkorDBGraphStore(graph).get_edge_index(PAPER_CITES, layout="coo")
+        assert row.tolist() == [0, 0, 1]
+        assert col.tolist() == [1, 1, 0]
 
-    def test_remove_nonexistent_returns_false(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        attr = EdgeAttr(edge_type=("X", "y", "Z"), layout=EdgeLayout.COO)
-        assert store._remove_edge_index(attr) is False
+    def test_edge_query_projects_relationship_id(self):
+        from falkordb_pyg.utils import build_edge_query
 
-    def test_put_non_coo_raises(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        attr = EdgeAttr(edge_type=("A", "rel", "B"), layout=EdgeLayout.CSC)
-        with pytest.raises(NotImplementedError):
-            store._put_edge_index((torch.tensor([0]), torch.tensor([1])), attr)
+        assert build_edge_query("paper", "cites", "paper").endswith(
+            "RETURN ID(s), ID(d), ID(r)"
+        )
+
+    def test_mapper_is_shared_across_edge_types(self, hetero_graph):
+        store = FalkorDBGraphStore(hetero_graph)
+        store.get_edge_index(AUTHOR_WRITES, layout="coo")
+        calls_before = len(hetero_graph.calls)
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        # Only the edge query is new; the :paper id map is reused.
+        assert len(hetero_graph.calls) == calls_before + 1
 
 
 # ---------------------------------------------------------------------------
-# Tests – get_all_edge_attrs
+# Tests – edge attribute registry
 # ---------------------------------------------------------------------------
 
 
-class TestGetAllEdgeAttrs:
-    def test_empty_initially(self):
-        graph = MagicMock()
-        store = FalkorDBGraphStore(graph)
+class TestEdgeAttrs:
+    def test_empty_initially(self, store):
         assert store.get_all_edge_attrs() == []
 
-    def test_returns_registered_attrs(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        edge_type = ("paper", "cites", "paper")
-        attr = EdgeAttr(edge_type=edge_type, layout=EdgeLayout.COO, size=(3, 3))
-        store._put_edge_index((torch.tensor([0]), torch.tensor([1])), attr)
+    def test_auto_registered_with_size(self, store):
+        store.get_edge_index(PAPER_CITES, layout="coo")
         attrs = store.get_all_edge_attrs()
         assert len(attrs) == 1
-        assert attrs[0].edge_type == edge_type
+        assert attrs[0].edge_type == PAPER_CITES
+        assert attrs[0].size == (3, 3)
 
-    def test_auto_registers_on_get(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        edge_type = ("paper", "cites", "paper")
-        attr = EdgeAttr(edge_type=edge_type, layout=EdgeLayout.COO)
-        store._get_edge_index(attr)
+    def test_registry_is_not_leaked_to_callers(self, store):
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        store.get_all_edge_attrs()[0].size = (99, 99)
+        assert store.get_all_edge_attrs()[0].size == (3, 3)
+
+    def test_put_without_size_backfills_it(self, store):
+        """A missing size truncates the CSC colptr and drops trailing nodes."""
+        store.put_edge_index(
+            (torch.tensor([0]), torch.tensor([1])), PAPER_CITES, layout="coo"
+        )
+        assert store.get_all_edge_attrs()[0].size == (3, 3)
+
+    def test_hetero_sizes_are_per_endpoint(self, hetero_graph):
+        store = FalkorDBGraphStore(hetero_graph)
+        store.get_edge_index(AUTHOR_WRITES, layout="coo")
+        assert store.get_all_edge_attrs()[0].size == (2, 3)
+
+
+# ---------------------------------------------------------------------------
+# Tests – layout handling
+# ---------------------------------------------------------------------------
+
+
+class TestLayout:
+    def test_non_coo_get_returns_none_rather_than_coo_tensors(self, store):
+        """0.2.1 answered a CSR request with COO tensors and no error."""
+        assert (
+            store._get_edge_index(EdgeAttr(PAPER_CITES, layout=EdgeLayout.CSR)) is None
+        )
+
+    def test_put_accepts_converted_layouts(self, store):
+        attr = EdgeAttr(PAPER_CITES, layout=EdgeLayout.CSC, size=(3, 3))
+        assert store._put_edge_index(
+            (torch.tensor([0, 1]), torch.tensor([0, 1, 2, 2])), attr
+        )
+        assert store._get_edge_index(attr) is not None
+
+    def test_coo_fetch_after_a_converted_put_keeps_one_registration(self, store):
+        """A CSC put registers the type; the later COO fetch must not re-register."""
+        csc = EdgeAttr(PAPER_CITES, layout=EdgeLayout.CSC, size=(3, 3))
+        store._put_edge_index((torch.tensor([0, 1]), torch.tensor([0, 1, 2, 2])), csc)
+        assert len(store.get_all_edge_attrs()) == 1
+
+        row, col = store.get_edge_index(PAPER_CITES, layout="coo")
+        assert row.tolist() == [0, 1, 1]  # fetched from the graph, not the CSC cache
         attrs = store.get_all_edge_attrs()
         assert len(attrs) == 1
+        assert attrs[0].size == (3, 3)
+
+    def test_converted_layout_does_not_replace_the_coo_registration(self, store):
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        store.csc(store=True)
+        attrs = store.get_all_edge_attrs()
+        assert len(attrs) == 1
+        assert attrs[0].layout == EdgeLayout.COO
 
 
 # ---------------------------------------------------------------------------
-# Tests – heterogeneous graphs
+# Tests – caching and diagnostics
 # ---------------------------------------------------------------------------
 
 
-class TestHeterogeneousGraph:
-    def test_hetero_edge_remapping(self, hetero_graph):
+class TestCachingAndDiagnostics:
+    def test_db_not_queried_on_second_get(self, store, homo_graph):
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        count = len(homo_graph.calls)
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        assert len(homo_graph.calls) == count
+
+    def test_empty_edge_type_warns(self):
+        graph = FakeFalkorGraph(nodes={"paper": {0: {}}}, edges={})
+        store = FalkorDBGraphStore(graph)
+        with pytest.warns(UserWarning, match="No edges matched"):
+            row, _ = store.get_edge_index(("paper", "TYPO", "paper"), layout="coo")
+        assert row.numel() == 0
+
+    def test_clear_cache_drops_topology_and_mappers(self, store, homo_graph):
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        calls = len(homo_graph.calls)
+        store.clear_cache()
+        assert store._id_mappers == {}
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        assert len(homo_graph.calls) > calls
+
+    def test_clear_cache_is_selective(self, hetero_graph):
         store = FalkorDBGraphStore(hetero_graph)
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        store.get_edge_index(AUTHOR_WRITES, layout="coo")
+        store.clear_cache(PAPER_CITES)
+        calls = len(hetero_graph.calls)
+        store.get_edge_index(AUTHOR_WRITES, layout="coo")
+        assert len(hetero_graph.calls) == calls  # still cached
 
-        writes_attr = EdgeAttr(
-            edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO
-        )
-        result = store._get_edge_index(writes_attr)
-        assert result is not None
-        # author IDs 10->0, paper IDs 0,1,2->0,1,2
-        # writes edges: (10,0),(10,1),(11,2) -> pyg (0,0),(0,1),(1,2)
-        assert torch.equal(result[0], torch.tensor([0, 0, 1]))
-        assert torch.equal(result[1], torch.tensor([0, 1, 2]))
-
-    def test_multiple_edge_types_cached_separately(self, hetero_graph):
-        store = FalkorDBGraphStore(hetero_graph)
-
-        writes_attr = EdgeAttr(
-            edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO
-        )
-        cites_attr = EdgeAttr(
-            edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
-        )
-        writes = store._get_edge_index(writes_attr)
-        cites = store._get_edge_index(cites_attr)
-        assert writes[0].shape[0] == 3
-        assert cites[0].shape[0] == 2
+    def test_remove_then_get_refetches(self, store, homo_graph):
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        store.remove_edge_index(PAPER_CITES, layout="coo")
+        count = len(homo_graph.calls)
+        store.get_edge_index(PAPER_CITES, layout="coo")
+        assert len(homo_graph.calls) > count
 
 
 # ---------------------------------------------------------------------------
-# Tests – node ID mapping via custom labels
+# Tests – type mapping
 # ---------------------------------------------------------------------------
 
 
-class TestNodeTypeLabelMapping:
-    def test_custom_label_used_in_query(self):
-        graph = MagicMock()
-        node_result = _make_result([[5], [6]])
-        edge_result = _make_result([[5, 6]])
-
-        def _query(q):
-            if "RETURN ID(n)" in q:
-                return node_result
-            if "RETURN ID(s)" in q:
-                return edge_result
-            raise ValueError(q)
-
-        graph.query.side_effect = _query
-
+class TestTypeMapping:
+    def test_custom_label_and_rel_used_in_query(self):
+        graph = FakeFalkorGraph(
+            nodes={"Paper": {0: {}, 1: {}}},
+            edges={("Paper", "CITES", "Paper"): [(0, 1)]},
+        )
         store = FalkorDBGraphStore(
             graph,
             node_type_to_label={"paper": "Paper"},
-            edge_type_to_rel={("paper", "cites", "paper"): "CITES"},
+            edge_type_to_rel={PAPER_CITES: "CITES"},
         )
-        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
-        result = store._get_edge_index(attr)
-        assert result is not None
-        # Verify that the queries used the mapped labels
-        calls = [c.args[0] for c in graph.query.call_args_list]
-        assert any("Paper" in c for c in calls)
-        assert any("CITES" in c for c in calls)
-
-
-# ---------------------------------------------------------------------------
-# Tests – caching behaviour
-# ---------------------------------------------------------------------------
-
-
-class TestCaching:
-    def test_db_not_queried_on_second_get(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
-
-        store._get_edge_index(attr)
-        call_count_after_first = homo_graph.query.call_count
-
-        store._get_edge_index(attr)
-        assert homo_graph.query.call_count == call_count_after_first
-
-    def test_put_overwrites_cached_value(self, homo_graph):
-        store = FalkorDBGraphStore(homo_graph)
-        edge_type = ("paper", "cites", "paper")
-        attr = EdgeAttr(edge_type=edge_type, layout=EdgeLayout.COO)
-
-        store._get_edge_index(attr)  # populate cache from DB
-
-        new_src = torch.tensor([2])
-        new_dst = torch.tensor([0])
-        store._put_edge_index((new_src, new_dst), attr)
-
-        result = store._get_edge_index(attr)
-        assert torch.equal(result[0], new_src)
-        assert torch.equal(result[1], new_dst)
+        row, _ = store.get_edge_index(PAPER_CITES, layout="coo")
+        assert row.tolist() == [0]

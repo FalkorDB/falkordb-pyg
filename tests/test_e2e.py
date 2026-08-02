@@ -242,7 +242,7 @@ class TestGraphStoreE2E:
         store = FalkorDBGraphStore(graph)
         attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
-        ei = store._get_edge_index(attr)
+        ei = store.get_edge_index(attr)
         assert ei is not None
         src, dst = ei
         # 3 edges created
@@ -252,14 +252,36 @@ class TestGraphStoreE2E:
         assert src.min() >= 0 and src.max() < 3
         assert dst.min() >= 0 and dst.max() < 3
 
+    def test_parallel_edges_are_not_collapsed(self):
+        """A real FalkorDB dedups identical (ID(s), ID(d)) projections."""
+        name = _unique_graph_name()
+        db = FalkorDB(host=_HOST, port=_PORT)
+        g = db.select_graph(name)
+        g.query(
+            """
+            CREATE (a:paper {x: [1.0]}), (b:paper {x: [2.0]}),
+                   (a)-[:cites]->(b), (a)-[:cites]->(b)
+            """
+        )
+        try:
+            store = FalkorDBGraphStore(_connect(name))
+            attr = EdgeAttr(
+                edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
+            )
+            src, dst = store.get_edge_index(attr)
+            assert src.shape[0] == 2, "parallel edge was dropped"
+            assert src.tolist() == [0, 0] and dst.tolist() == [1, 1]
+        finally:
+            _drop_graph(name)
+
     def test_node_id_remapping(self, homo_graph_name):
         graph = _connect(homo_graph_name)
         store = FalkorDBGraphStore(graph)
         attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
-        store._get_edge_index(attr)
+        store.get_edge_index(attr)
         # Verify mapper was built with 3 nodes
-        mapper = store._id_mappers["paper"]
+        mapper = store.id_mapper("paper")
         assert mapper.num_nodes == 3
 
     def test_edge_attr_auto_registered(self, homo_graph_name):
@@ -267,7 +289,7 @@ class TestGraphStoreE2E:
         store = FalkorDBGraphStore(graph)
         attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
-        store._get_edge_index(attr)
+        store.get_edge_index(attr)
         all_attrs = store.get_all_edge_attrs()
         assert len(all_attrs) == 1
         assert all_attrs[0].edge_type == ("paper", "cites", "paper")
@@ -278,8 +300,8 @@ class TestGraphStoreE2E:
         store = FalkorDBGraphStore(graph)
         attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
-        first = store._get_edge_index(attr)
-        second = store._get_edge_index(attr)
+        first = store.get_edge_index(attr)
+        second = store.get_edge_index(attr)
         # Same tuple object from cache
         assert first[0] is second[0]
         assert first[1] is second[1]
@@ -292,13 +314,13 @@ class TestGraphStoreE2E:
 
         src = torch.tensor([0, 1])
         dst = torch.tensor([1, 2])
-        assert store._put_edge_index((src, dst), attr) is True
-        result = store._get_edge_index(attr)
+        assert store.put_edge_index((src, dst), attr) is True
+        result = store.get_edge_index(attr)
         assert torch.equal(result[0], src)
         assert torch.equal(result[1], dst)
 
-        assert store._remove_edge_index(attr) is True
-        assert store._remove_edge_index(attr) is False
+        assert store.remove_edge_index(attr) is True
+        assert store.remove_edge_index(attr) is False
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +351,7 @@ class TestHeterogeneousE2E:
         store = FalkorDBGraphStore(graph)
         attr = EdgeAttr(edge_type=("author", "writes", "paper"), layout=EdgeLayout.COO)
 
-        ei = store._get_edge_index(attr)
+        ei = store.get_edge_index(attr)
         assert ei is not None
         assert ei[0].shape[0] == 3  # 3 writes edges
 
@@ -338,7 +360,7 @@ class TestHeterogeneousE2E:
         store = FalkorDBGraphStore(graph)
         attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
 
-        ei = store._get_edge_index(attr)
+        ei = store.get_edge_index(attr)
         assert ei is not None
         assert ei[0].shape[0] == 2  # 2 cites edges
 
@@ -353,8 +375,8 @@ class TestHeterogeneousE2E:
             edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO
         )
 
-        writes_ei = store._get_edge_index(writes_attr)
-        cites_ei = store._get_edge_index(cites_attr)
+        writes_ei = store.get_edge_index(writes_attr)
+        cites_ei = store.get_edge_index(cites_attr)
 
         # Both should be present
         attrs = store.get_all_edge_attrs()
@@ -394,7 +416,7 @@ class TestGetRemoteBackendE2E:
             host=_HOST, port=_PORT, graph_name=homo_graph_name
         )
         attr = EdgeAttr(edge_type=("paper", "cites", "paper"), layout=EdgeLayout.COO)
-        ei = graph_store._get_edge_index(attr)
+        ei = graph_store.get_edge_index(attr)
         assert ei is not None
         assert ei[0].shape[0] == 3
 
@@ -421,6 +443,6 @@ class TestGetRemoteBackendE2E:
         assert x.shape == (3, 2)
 
         attr = EdgeAttr(edge_type=("Author", "writes", "Paper"), layout=EdgeLayout.COO)
-        ei = graph_store._get_edge_index(attr)
+        ei = graph_store.get_edge_index(attr)
         assert ei is not None
         assert ei[0].shape[0] == 3
