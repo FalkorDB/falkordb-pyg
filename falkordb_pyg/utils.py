@@ -44,17 +44,29 @@ class NodeIDMapper:
         return self._pyg_to_falkor[pyg_idx]
 
     def remap_edges(
-        self, src_ids: List[int], dst_ids: List[int]
+        self,
+        src_ids: List[int],
+        dst_ids: List[int],
+        dst_mapper: Optional["NodeIDMapper"] = None,
     ) -> Tuple[List[int], List[int]]:
         """Remap lists of FalkorDB src/dst IDs to PyG indices.
 
-        Pairs where either endpoint is missing from the mapping are silently
-        dropped.
+        Pairs where either endpoint is missing from the relevant mapping are
+        silently dropped.
+
+        Args:
+            src_ids: FalkorDB IDs of the source endpoints.
+            dst_ids: FalkorDB IDs of the destination endpoints.
+            dst_mapper: Mapper for the destination node type.  Required for a
+                heterogeneous edge, where the endpoints belong to different
+                node types and therefore to different index spaces.  Defaults
+                to ``self`` for a homogeneous edge.
         """
+        dst = dst_mapper if dst_mapper is not None else self
         new_src, new_dst = [], []
         for s, d in zip(src_ids, dst_ids):
             ps = self._falkor_to_pyg.get(s)
-            pd = self._falkor_to_pyg.get(d)
+            pd = dst._falkor_to_pyg.get(d)
             if ps is not None and pd is not None:
                 new_src.append(ps)
                 new_dst.append(pd)
@@ -66,19 +78,42 @@ class NodeIDMapper:
 # ---------------------------------------------------------------------------
 
 
+def quote_identifier(name: str) -> str:
+    """Return *name* as a backtick-quoted Cypher identifier.
+
+    Cypher escapes a literal backtick inside a quoted identifier by doubling
+    it.  Without this, a label or property containing a backtick terminates
+    the quoted section early and the remainder is parsed as Cypher — turning
+    a stray identifier into arbitrary query execution.
+    """
+    if not isinstance(name, str):
+        raise TypeError(
+            f"Cypher identifier must be a string, got {type(name).__name__}"
+        )
+    if not name:
+        raise ValueError("Cypher identifier must not be empty")
+    escaped = name.replace("`", "``")
+    return f"`{escaped}`"
+
+
 def build_node_ids_query(label: str) -> str:
     """Return a Cypher query that fetches all internal node IDs for *label*."""
-    return f"MATCH (n:`{label}`) RETURN ID(n) ORDER BY ID(n)"
+    return f"MATCH (n:{quote_identifier(label)}) RETURN ID(n) ORDER BY ID(n)"
 
 
 def build_feature_query(label: str, prop: str) -> str:
     """Return a Cypher query that fetches a node property ordered by ID."""
-    return f"MATCH (n:`{label}`) RETURN n.`{prop}`, ID(n) ORDER BY ID(n)"
+    return (
+        f"MATCH (n:{quote_identifier(label)}) "
+        f"RETURN n.{quote_identifier(prop)}, ID(n) ORDER BY ID(n)"
+    )
 
 
 def build_edge_query(src_label: str, rel_type: str, dst_label: str) -> str:
     """Return a Cypher query that fetches (src_id, dst_id) for an edge type."""
     return (
-        f"MATCH (s:`{src_label}`)-[r:`{rel_type}`]->(d:`{dst_label}`) "
+        f"MATCH (s:{quote_identifier(src_label)})"
+        f"-[r:{quote_identifier(rel_type)}]->"
+        f"(d:{quote_identifier(dst_label)}) "
         f"RETURN ID(s), ID(d)"
     )
