@@ -1910,7 +1910,7 @@ wheels = [
 
 [[package]]
 name = "torch-geometric"
-version = "2.8.0.post1"
+version = "2.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1924,9 +1924,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/2c/bfcb404c448f7c347cea7b956d3c7e92d53e36c8db2010eb1bdc1b937bfb/torch_geometric-2.8.0.post1.tar.gz", hash = "sha256:2c0c81666ec10f2132f6b4e0b6c57fc813f2c9f6b57599d7b7a799c614c22fbd", size = 928666, upload-time = "2026-07-20T20:44:40.36Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/d7/f754447893b8d275d479ffbce36e35d873b3df906eb380d810d239ffe66a/torch_geometric-2.8.1.tar.gz", hash = "sha256:3d4431567fcf4865a29cfec25c52484382dd38fd46a45fb4f9d473545d64b812", size = 929429, upload-time = "2026-10-12T11:47:39.023Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/5c/edf74a71249ad19aa0390fb97ff021e2a5b04ce23252730014e1feac957e/torch_geometric-2.8.0.post1-py3-none-any.whl", hash = "sha256:5d9841cbfa64eadc425e445767127d103dd52fdc5890548c6364986c9bc78029", size = 1325397, upload-time = "2026-07-20T20:44:38.789Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/24/486ae77b41d129b6a5035dd9f028141ec8d520c210a0c3fb803434f18b5f/torch_geometric-2.8.1-py3-none-any.whl", hash = "sha256:b628de243c0893f3435b6eca9a7bbc07f3219293ed27c974b8929aaae42e65d0", size = 1325471, upload-time = "2026-10-12T11:47:35.803Z" },
 ]
 
 [[package]]
